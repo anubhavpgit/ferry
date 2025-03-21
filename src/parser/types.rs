@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TokenType {
     // Literals
     Number(f64),
@@ -186,12 +186,45 @@ pub enum DataType {
     Union,
     Enum,
 }
-
+#[derive(Debug)]
 pub enum ASTNodeType {
+    // Top-level constructs
     Program,
     Function,
+    FunctionDeclaration,
+
+    // Declarations
     VariableDeclaration,
-    Expression,
+    Type,
+
+    // Statements
     Statement,
-    // Add more node types as needed
+    ExpressionStatement,
+    IfStatement,
+    WhileStatement,
+    ForStatement,
+    DoWhileStatement,
+    SwitchStatement,
+    CaseStatement,
+    DefaultStatement,
+    BreakStatement,
+    ContinueStatement,
+    GotoStatement,
+    ReturnStatement,
+    BlockStatement,
+
+    // Expressions
+    Expression,
+    Assignment,
+    BinaryExpression,
+    UnaryExpression,
+    GroupingExpression,
+    CallExpression,
+
+    // Literals and identifiers
+    Literal,
+    Variable,
+
+    // Preprocessor
+    PreprocessorDirective,
 }
