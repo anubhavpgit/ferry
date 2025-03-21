@@ -26,24 +26,48 @@ pub fn parse_source(source: &str) -> Result<(), String> {
 
     // DEBUG
 
+    println!("Tokens:");
     for token in &tokens {
         println!("{:?} ", token.token_type);
     }
-    println!(" Parsed and tokenized successfully\n");
+    println!("Parsed and tokenized successfully\n");
 
-    let _ast = build_ast(&tokens)?;
+    let ast = build_ast(&tokens)?;
 
-    for node in _ast.children {
-        println!("{:?} ", node.node_type);
-        println!("{:?} ", node.value);
-        println!("{:?} ", node.children);
-        println!("-----------------");
+    // DEBUG
+
+    println!("AST Structure:");
+    println!("└── Root");
+    for (i, node) in ast.children.iter().enumerate() {
+        let is_last = i == ast.children.len() - 1;
+        print_ast_node(node, "", is_last);
     }
 
-    println!(" AST built successfully\n");
+    println!("\nAST built successfully\n");
 
     // Perform semantic analysis and build the AST
 
     // Placeholder for return
     Ok(())
+}
+
+// Helper function to print the AST
+fn print_ast_node(node: &ast::ASTNode, prefix: &str, is_last: bool) {
+    let node_connector = if is_last { "└── " } else { "├── " };
+    let node_info = format!("{:?}: {:?}", node.node_type, node.value);
+
+    println!("{}{}{}", prefix, node_connector, node_info);
+
+    if !node.children.is_empty() {
+        let child_prefix = if is_last {
+            format!("{}    ", prefix)
+        } else {
+            format!("{}│   ", prefix)
+        };
+
+        for (i, child) in node.children.iter().enumerate() {
+            let is_last_child = i == node.children.len() - 1;
+            print_ast_node(child, &child_prefix, is_last_child);
+        }
+    }
 }
