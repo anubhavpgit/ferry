@@ -1,4 +1,5 @@
 mod parser;
+mod semantic;
 
 use parser::parse_source;
 use std::env;
@@ -61,9 +62,22 @@ fn main() {
 fn compile(file: String) -> Result<bool, String> {
     // Parse the source code
     match parse_source(&file) {
-        Ok(_) => {
-            println!("Source parsed successfully");
-            Ok(true)
+        Ok(head) => {
+            match semantic::analyze_semantics(&head) {
+                Ok(_) => {
+                    println!("Semantic analysis passed successfully");
+
+                    // Continue with next phases...
+                    Ok(true)
+                }
+                Err(errors) => {
+                    println!("Semantic analysis failed with errors:");
+                    for error in errors {
+                        println!("  - {}", error);
+                    }
+                    Ok(false)
+                }
+            }
         }
         Err(e) => {
             println!("Failed to parse source: {}", e);
