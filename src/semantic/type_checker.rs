@@ -174,6 +174,7 @@ pub fn check_types(node: &ASTNode, symbol_table: &SymbolTable) -> Result<Type, S
 
 pub fn is_type_compatible(target_type: &Type, value_type: &Type) -> bool {
     match (target_type, value_type) {
+        // Basic types
         (Type::Int, Type::Int) => true,
         (Type::Float, Type::Int) => true, // Implicit conversion
         (Type::Float, Type::Float) => true,
@@ -182,6 +183,72 @@ pub fn is_type_compatible(target_type: &Type, value_type: &Type) -> bool {
         (Type::Double, Type::Double) => true,
         (Type::Bool, Type::Bool) => true,
         (Type::Char, Type::Char) => true,
+        (Type::Void, Type::Void) => true,
+
+        // Pointer types
+        (Type::Pointer(target_inner), Type::Pointer(value_inner)) => {
+            is_type_compatible(target_inner, value_inner)
+        }
+
+        // Void pointer compatibility (void* can be assigned from any pointer)
+        (Type::Pointer(target_inner), _) if matches!(**target_inner, Type::Void) => {
+            matches!(value_type, Type::Pointer(_))
+        }
+
+        // Any pointer can be assigned to void*
+        (_, Type::Pointer(value_inner)) if matches!(**value_inner, Type::Void) => {
+            matches!(target_type, Type::Pointer(_))
+        }
+
+        // Function types
+        (
+            Type::Function {
+                return_type: target_return,
+                params: target_params,
+            },
+            Type::Function {
+                return_type: value_return,
+                params: value_params,
+            },
+        ) => {
+            // Functions are compatible if their return types and parameter lists match
+            if !is_type_compatible(target_return, value_return) {
+                return false;
+            }
+
+            if target_params.len() != value_params.len() {
+                return false;
+            }
+
+            // Check each parameter type
+            for (target_param, value_param) in target_params.iter().zip(value_params.iter()) {
+                if !is_type_compatible(target_param, value_param) {
+                    return false;
+                }
+            }
+
+            true
+        }
+
+        // Array types
+        (
+            Type::Array {
+                element_type: target_elem,
+                size: _,
+            },
+            Type::Array {
+                element_type: value_elem,
+                size: _,
+            },
+        ) => {
+            // In C, array size isn't strictly checked in all contexts
+            is_type_compatible(target_elem, value_elem)
+        }
+
+        // Struct types (typically only compatible with identical types)
+        (Type::Struct(target_name), Type::Struct(value_name)) => target_name == value_name,
+
+        // For any other combinations, types are not compatible
         _ => false,
     }
 }
