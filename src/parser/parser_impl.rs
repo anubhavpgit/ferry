@@ -80,6 +80,10 @@ impl<'a> Parser<'a> {
         let mut program = ASTNode::new(ASTNodeType::Program, None);
 
         while !self.is_at_end() {
+            if let TokenType::Comment(_) = self.peek().token_type {
+                self.advance(); // Simply consume and ignore comment tokens
+                continue;
+            }
             match &self.peek().token_type {
                 TokenType::Type(_) => {
                     let declaration = self.parse_declaration()?;

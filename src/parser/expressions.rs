@@ -193,6 +193,20 @@ impl<'a> Parser<'a> {
                 ));
             }
         }
+        // Add this block for character literals
+        if self.check(TokenType::Char(' ')) {
+            // The actual char value doesn't matter for the check
+            // Clone the token_type before advancing
+            let token_type = self.peek().token_type.clone();
+            self.advance();
+
+            if let TokenType::Char(value) = token_type {
+                return Ok(ASTNode::new(
+                    ASTNodeType::Literal,
+                    Some(format!("'{}'", value)),
+                ));
+            }
+        }
         if self.check(TokenType::Identifier(String::new())) {
             // Clone the token_type before advancing
             let token_type = self.peek().token_type.clone();

@@ -131,7 +131,6 @@ pub fn check_types(node: &ASTNode, symbol_table: &SymbolTable) -> Result<Type, S
     match node.node_type {
         ASTNodeType::Literal => {
             // Determine type from the literal value
-            // This is simplified - we'd need more sophisticated parsing in a real compiler
             let value = node
                 .value
                 .as_ref()
@@ -139,6 +138,16 @@ pub fn check_types(node: &ASTNode, symbol_table: &SymbolTable) -> Result<Type, S
 
             if value.starts_with('"') {
                 Ok(Type::Pointer(Box::new(Type::Char))) // String literal
+            } else if value.starts_with('\'') && value.ends_with('\'') {
+                // Character literal
+                let char_content = &value[1..value.len() - 1];
+                if char_content.len() > 1 && !char_content.starts_with('\\') {
+                    return Err(format!(
+                        "Invalid character literal: '{}' - too many characters",
+                        char_content
+                    ));
+                }
+                Ok(Type::Char)
             } else if value == "true" || value == "false" {
                 Ok(Type::Bool)
             } else {
@@ -165,6 +174,265 @@ pub fn check_types(node: &ASTNode, symbol_table: &SymbolTable) -> Result<Type, S
         ASTNodeType::BinaryExpression => check_binary_expression(node, symbol_table),
         ASTNodeType::UnaryExpression => check_unary_expression(node, symbol_table),
         ASTNodeType::CallExpression => check_function_call(node, symbol_table),
+
+        ASTNodeType::VariableDeclaration => {
+            // Extract variable type from first child
+            if node.children.is_empty() || !matches!(node.children[0].node_type, ASTNodeType::Type)
+            {
+                return Err("Variable declaration missing type".to_string());
+            }
+
+            let type_str = node.children[0]
+                .value
+                .as_ref()
+                .ok_or_else(|| "Type node missing value".to_string())?;
+
+            let var_type = parse_type_string(type_str)?;
+
+            // If there's an initializer, check its type compatibility
+            if node.children.len() > 1 {
+                let init_type = check_types(&node.children[1], symbol_table)?;
+
+                if !is_type_compatible(&var_type, &init_type) {
+                    return Err(format!(
+                        "Type mismatch in variable initialization: cannot assign {:?} to {:?}",
+                        init_type, var_type
+                    ));
+                }
+            }
+
+            Ok(var_type)
+        }
+
+        ASTNodeType::FunctionDeclaration => {
+            // Extract return type from first child
+            if node.children.is_empty() || !matches!(node.children[0].node_type, ASTNodeType::Type)
+            {
+                return Err("Function declaration missing return type".to_string());
+            }
+
+            let return_type_str = node.children[0]
+                .value
+                .as_ref()
+                .ok_or_else(|| "Type node missing value".to_string())?;
+
+            let return_type = parse_type_string(return_type_str)?;
+
+            // Extract parameter types
+            let mut param_types = Vec::new();
+            let mut param_index = 1;
+
+            while param_index < node.children.len() {
+                let child = &node.children[param_index];
+
+                if matches!(child.node_type, ASTNodeType::VariableDeclaration) {
+                    // Check parameter type
+                    let param_type = check_types(child, symbol_table)?;
+                    param_types.push(param_type);
+                    param_index += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Create function type
+            let func_type = Type::Function {
+                return_type: Box::new(return_type),
+                params: param_types,
+            };
+
+            Ok(func_type)
+        }
+
+        ASTNodeType::Type => {
+            // Just return the type specified by the node
+            let type_str = node
+                .value
+                .as_ref()
+                .ok_or_else(|| "Type node missing value".to_string())?;
+
+            parse_type_string(type_str)
+        }
+
+        ASTNodeType::Assignment => {
+            if node.children.len() != 2 {
+                return Err("Assignment must have exactly two operands".to_string());
+            }
+
+            let target_type = check_types(&node.children[0], symbol_table)?;
+            let value_type = check_types(&node.children[1], symbol_table)?;
+
+            if !is_type_compatible(&target_type, &value_type) {
+                return Err(format!(
+                    "Type mismatch in assignment: cannot assign {:?} to {:?}",
+                    value_type, target_type
+                ));
+            }
+
+            Ok(target_type)
+        }
+
+        ASTNodeType::ReturnStatement => {
+            // If there's a return value, check its type
+            // In a complete implementation, you would verify this against the function's return type
+            if node.children.is_empty() {
+                Ok(Type::Void)
+            } else {
+                check_types(&node.children[0], symbol_table)
+            }
+        }
+
+        ASTNodeType::ExpressionStatement => {
+            // Pass through to the contained expression
+            if node.children.is_empty() {
+                return Err("Expression statement has no expression".to_string());
+            }
+
+            check_types(&node.children[0], symbol_table)
+        }
+
+        ASTNodeType::IfStatement | ASTNodeType::WhileStatement | ASTNodeType::DoWhileStatement => {
+            // For if/while/do-while, check that the condition is a boolean expression
+            let condition_index = if matches!(node.node_type, ASTNodeType::DoWhileStatement) {
+                1
+            } else {
+                0
+            };
+
+            if node.children.len() <= condition_index {
+                return Err(format!("{:?} statement missing condition", node.node_type));
+            }
+
+            let cond_type = check_types(&node.children[condition_index], symbol_table)?;
+
+            if !matches!(cond_type, Type::Bool) && !matches!(cond_type, Type::Int) {
+                return Err(format!(
+                    "Condition must be a boolean or integer expression, got {:?}",
+                    cond_type
+                ));
+            }
+
+            // For if statements with else clause, both branches must be checked
+            // For loops, the body must be checked
+            // But this doesn't affect the resulting type
+
+            Ok(Type::Void) // Control flow statements don't have a meaningful type
+        }
+
+        ASTNodeType::ForStatement => {
+            // Check initialization
+            if node.children.len() < 4 {
+                return Err(
+                    "For statement must have initialization, condition, increment, and body"
+                        .to_string(),
+                );
+            }
+
+            let _ = check_types(&node.children[0], symbol_table)?;
+
+            // Check condition (must be boolean)
+            let cond_type = check_types(&node.children[1], symbol_table)?;
+
+            if !matches!(cond_type, Type::Bool) && !matches!(cond_type, Type::Int) {
+                return Err(format!(
+                    "For condition must be a boolean or integer expression, got {:?}",
+                    cond_type
+                ));
+            }
+
+            // Check increment and body (types not important)
+            let _ = check_types(&node.children[2], symbol_table)?;
+            let _ = check_types(&node.children[3], symbol_table)?;
+
+            Ok(Type::Void) // Control flow statements don't have a meaningful type
+        }
+
+        ASTNodeType::BlockStatement => {
+            // Process all statements in block, return type of last expression (if any)
+            let mut result_type = Type::Void;
+
+            for child in &node.children {
+                result_type = check_types(child, symbol_table)?;
+            }
+
+            Ok(result_type)
+        }
+
+        ASTNodeType::GroupingExpression => {
+            // Pass through to the contained expression
+            if node.children.is_empty() {
+                return Err("Grouping expression has no expression".to_string());
+            }
+
+            check_types(&node.children[0], symbol_table)
+        }
+
+        ASTNodeType::SwitchStatement => {
+            // Check that switch expression is an integer
+            if node.children.is_empty() {
+                return Err("Switch statement missing expression".to_string());
+            }
+
+            let expr_type = check_types(&node.children[0], symbol_table)?;
+
+            if !matches!(expr_type, Type::Int) && !matches!(expr_type, Type::Char) {
+                return Err(format!(
+                    "Switch expression must be an integer or character, got {:?}",
+                    expr_type
+                ));
+            }
+
+            // Check case statements (not critical for type checking)
+            for i in 1..node.children.len() {
+                let _ = check_types(&node.children[i], symbol_table)?;
+            }
+
+            Ok(Type::Void)
+        }
+
+        ASTNodeType::CaseStatement | ASTNodeType::DefaultStatement => {
+            // Check case expression (must be constant integer)
+            if matches!(node.node_type, ASTNodeType::CaseStatement) && !node.children.is_empty() {
+                let case_type = check_types(&node.children[0], symbol_table)?;
+
+                if !matches!(case_type, Type::Int) && !matches!(case_type, Type::Char) {
+                    return Err(format!(
+                        "Case expression must be an integer or character constant, got {:?}",
+                        case_type
+                    ));
+                }
+            }
+
+            // Process case body statements
+            for i in 1..node.children.len() {
+                let _ = check_types(&node.children[i], symbol_table)?;
+            }
+
+            Ok(Type::Void)
+        }
+
+        ASTNodeType::BreakStatement | ASTNodeType::ContinueStatement => {
+            // These statements don't have a type
+            Ok(Type::Void)
+        }
+
+        ASTNodeType::PreprocessorDirective => {
+            // Preprocessor directives don't have a type
+            Ok(Type::Void)
+        }
+
+        ASTNodeType::Program => {
+            // Process all top-level declarations
+            let mut result_type = Type::Void;
+
+            for child in &node.children {
+                result_type = check_types(child, symbol_table)?;
+            }
+
+            Ok(result_type)
+        }
+
+        // Any other node types not explicitly handled
         _ => Err(format!(
             "Type checking not implemented for {:?}",
             node.node_type
@@ -172,6 +440,18 @@ pub fn check_types(node: &ASTNode, symbol_table: &SymbolTable) -> Result<Type, S
     }
 }
 
+// Helper function to parse type strings
+fn parse_type_string(type_str: &str) -> Result<Type, String> {
+    match type_str {
+        "Int" => Ok(Type::Int),
+        "Void" => Ok(Type::Void),
+        "Char" => Ok(Type::Char),
+        "Float" => Ok(Type::Float),
+        "Double" => Ok(Type::Double),
+        "Bool" => Ok(Type::Bool),
+        _ => Err(format!("Unsupported type: {}", type_str)),
+    }
+}
 pub fn is_type_compatible(target_type: &Type, value_type: &Type) -> bool {
     match (target_type, value_type) {
         // Basic types

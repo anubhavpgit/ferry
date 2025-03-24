@@ -4,6 +4,9 @@ use crate::parser::types::{ASTNodeType, Keyword, TokenType};
 
 impl<'a> Parser<'a> {
     pub fn parse_statement(&mut self) -> Result<ASTNode, String> {
+        while self.check(TokenType::Comment(String::new())) {
+            self.advance(); // Consume the comment token
+        }
         match &self.peek().token_type {
             // Control flow statements
             TokenType::Keyword(Keyword::If) => self.parse_if_statement(),
@@ -376,8 +379,23 @@ impl<'a> Parser<'a> {
 
         // Parse statements until we reach the closing brace
         while !self.check(TokenType::RightBrace) && !self.is_at_end() {
-            let statement = self.parse_statement()?;
-            block_node.add_child(statement);
+            // Skip any comments
+            if let TokenType::Comment(_) = self.peek().token_type {
+                self.advance(); // Simply consume and ignore comment tokens
+                continue;
+            }
+
+            // Try to parse a statement
+            // If we can't, we've likely hit a closing brace, which is fine
+            if let Ok(statement) = self.parse_statement() {
+                block_node.add_child(statement);
+            } else {
+                // If we couldn't parse a statement and haven't hit RightBrace,
+                // something's wrong - but we should still try to recover
+                if !self.check(TokenType::RightBrace) {
+                    self.advance(); // Skip the problematic token and continue
+                }
+            }
         }
 
         // Consume the closing brace
