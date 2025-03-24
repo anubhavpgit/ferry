@@ -3,4 +3,12 @@ name = "ferry"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "ferry"
+path = "src/main.rs"
+
+[[bin]]
+name = "mac_os_runner"
+path = "src/mac_os_runner.rs"
+
 [dependencies]
