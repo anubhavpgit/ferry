@@ -2,30 +2,25 @@
 This module is responsible for parsing the source code into an Abstract Syntax Tree (AST).
 It includes functions for tokenizing the source code and building the AST, error handling, semantic analysis and syntax checking.
  */
-mod ast;
+pub mod ast;
 mod declarations;
 mod expressions;
 mod parser_impl;
 mod preprocessor;
 mod statements;
 mod tokenizer;
-mod types;
+pub mod types;
+
+use ast::ASTNode;
 
 use crate::parser::ast::build_ast;
 use crate::parser::tokenizer::tokenize;
 
-// use crate::parser::ast::{ASTNode, ASTNodeType};
-// use crate::parser::ast::ASTNode;
-// use crate::parser::semantic_analyzer::analyze_semantics;
-// use crate::parser::error_handling::{Error, ErrorType};
-// use crate::parser::semantic_analyzer::SemanticAnalyzer;
-
-pub fn parse_source(source: &str) -> Result<(), String> {
+pub fn parse_source(source: &str) -> Result<(ASTNode), String> {
     // Tokenize the source code
     let tokens = tokenize(source)?;
 
     // DEBUG
-
     println!("Tokens:");
     for token in &tokens {
         println!("{:?} ", token.token_type);
@@ -35,7 +30,6 @@ pub fn parse_source(source: &str) -> Result<(), String> {
     let ast = build_ast(&tokens)?;
 
     // DEBUG
-
     println!("AST Structure:");
     println!("└── Root");
     for (i, node) in ast.children.iter().enumerate() {
@@ -48,7 +42,7 @@ pub fn parse_source(source: &str) -> Result<(), String> {
     // Perform semantic analysis and build the AST
 
     // Placeholder for return
-    Ok(())
+    Ok(ast)
 }
 
 // Helper function to print the AST
