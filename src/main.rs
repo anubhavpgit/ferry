@@ -61,27 +61,19 @@ fn main() {
 
 fn compile(file: String) -> Result<bool, String> {
     // Parse the source code
-    match parse_source(&file) {
-        Ok(head) => {
-            match semantic::analyze_semantics(&head) {
-                Ok(_) => {
-                    println!("Semantic analysis passed successfully");
+    let ast = parse_source(&file)?; // Parse the source code into an AST
 
-                    // Continue with next phases...
-                    Ok(true)
-                }
-                Err(errors) => {
-                    println!("Semantic analysis failed with errors:");
-                    for error in errors {
-                        println!("  - {}", error);
-                    }
-                    Ok(false)
-                }
-            }
-        }
-        Err(e) => {
-            println!("Failed to parse source: {}", e);
-            Ok(false)
-        }
-    }
+    // Perform semantic analysis
+    semantic::analyze_semantics(&ast)?; // Perform semantic analysis on the AST
+
+    // Generate code from the AST
+    // let ir = codegen::generate_ir(&analyzed_ast)?;
+    // println!("Intermediate representation generated successfully");
+
+    // Assembly generation
+    // let assembly = codegen::generate_assembly(&ir)?;
+    // println!("Assembly code generated successfully");
+
+    Ok(true) // Return true to indicate successful compilation
+             // Note: In a real-world scenario, you would also handle linking and outputting the final executable.
 }
