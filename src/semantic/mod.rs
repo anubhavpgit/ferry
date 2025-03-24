@@ -1,15 +1,19 @@
 // pub mod _error;
+pub mod preprocessor;
 pub mod symbol_table;
 pub mod type_checker;
 
 use crate::parser::ast::ASTNode;
 use crate::parser::types::ASTNodeType;
+use crate::semantic::preprocessor::process_preprocessor_directives;
 use crate::semantic::type_checker::is_type_compatible;
 
-pub fn analyze_semantics(ast: &ASTNode) -> Result<(), Vec<String>> {
+pub fn analyze_semantics(ast: &ASTNode) -> Result<(), String> {
     // Main entry point for semantic analysis
     let mut errors = Vec::new();
     let mut symbol_table = symbol_table::SymbolTable::new();
+
+    process_preprocessor_directives(ast, &mut symbol_table);
 
     // Traverse AST and analyze
     analyze_node(ast, &mut symbol_table, &mut errors);
@@ -17,7 +21,8 @@ pub fn analyze_semantics(ast: &ASTNode) -> Result<(), Vec<String>> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(errors)
+        // Format all errors into a single string
+        Err(format!("{}", errors.join("\n")))
     }
 }
 

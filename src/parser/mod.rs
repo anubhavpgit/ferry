@@ -16,7 +16,7 @@ use ast::ASTNode;
 use crate::parser::ast::build_ast;
 use crate::parser::tokenizer::tokenize;
 
-pub fn parse_source(source: &str) -> Result<(ASTNode), String> {
+pub fn parse_source(source: &str) -> Result<ASTNode, String> {
     // Tokenize the source code
     let tokens = tokenize(source)?;
 
