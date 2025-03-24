@@ -138,7 +138,7 @@ pub fn check_types(node: &ASTNode, symbol_table: &SymbolTable) -> Result<Type, S
                 .ok_or_else(|| "Literal node missing value".to_string())?;
 
             if value.starts_with('"') {
-                Ok(Type::Char) // String literal - this is simplified
+                Ok(Type::Pointer(Box::new(Type::Char))) // CORRECT
             } else if value == "true" || value == "false" {
                 Ok(Type::Bool)
             } else {
