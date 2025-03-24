@@ -1,8 +1,3 @@
-
-fn main() {
-    println!("Hello, world!");
-}
-
 // Generates RISC-V assembly from intermediate representation
 pub fn generate_riscv(ast: &str) -> String {
     // ...existing code...
