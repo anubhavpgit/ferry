@@ -1,4 +1,3 @@
-// pub mod _error;
 pub mod preprocessor;
 pub mod symbol_table;
 pub mod type_checker;
@@ -12,11 +11,12 @@ pub fn analyze_semantics(ast: &ASTNode) -> Result<(), String> {
     // Main entry point for semantic analysis
     let mut errors = Vec::new();
     let mut symbol_table = symbol_table::SymbolTable::new();
+    let mut function_context = None;
 
     process_preprocessor_directives(ast, &mut symbol_table);
 
     // Traverse AST and analyze
-    analyze_node(ast, &mut symbol_table, &mut errors);
+    analyze_node(ast, &mut symbol_table, &mut errors, &mut function_context);
 
     if errors.is_empty() {
         Ok(())
@@ -26,16 +26,23 @@ pub fn analyze_semantics(ast: &ASTNode) -> Result<(), String> {
     }
 }
 
+struct FunctionContext {
+    function_name: String,
+    return_type: symbol_table::Type,
+    has_return: bool,
+}
+
 fn analyze_node(
     node: &ASTNode,
     symbol_table: &mut symbol_table::SymbolTable,
     errors: &mut Vec<String>,
+    function_context: &mut Option<FunctionContext>,
 ) {
     match &node.node_type {
         ASTNodeType::Program => {
             // Process all top-level declarations
             for child in &node.children {
-                analyze_node(child, symbol_table, errors);
+                analyze_node(child, symbol_table, errors, function_context);
             }
         }
 
@@ -71,7 +78,7 @@ fn analyze_node(
                 symbol_table::Type::Void
             };
 
-            // Process parameters
+            // Process parameters as before...
             let mut params = Vec::new();
             let mut param_index = 1; // Start after return type
 
@@ -111,13 +118,24 @@ fn analyze_node(
             // Create new scope for function body
             symbol_table.enter_scope();
 
+            // Create new function context
+            let mut new_context = FunctionContext {
+                function_name: name.clone(),
+                return_type: return_type.clone(),
+                has_return: false,
+            };
+
+            // Save the old context to restore later
+            let old_context = function_context.take();
+            *function_context = Some(new_context);
+
             // Add parameters to function scope
             param_index = 1;
             while param_index < node.children.len() {
                 let child = &node.children[param_index];
 
                 if matches!(child.node_type, ASTNodeType::VariableDeclaration) {
-                    analyze_node(child, symbol_table, errors);
+                    analyze_node(child, symbol_table, errors, function_context);
                     param_index += 1;
                 } else {
                     break;
@@ -126,14 +144,71 @@ fn analyze_node(
 
             // Process function body if present
             if param_index < node.children.len() {
-                analyze_node(&node.children[param_index], symbol_table, errors);
+                analyze_node(
+                    &node.children[param_index],
+                    symbol_table,
+                    errors,
+                    function_context,
+                );
             }
+
+            // Check for return statement in non-void functions
+            if let Some(ctx) = function_context.take() {
+                if !matches!(ctx.return_type, symbol_table::Type::Void)
+                    && !ctx.has_return
+                    && ctx.function_name != "main"
+                {
+                    // main is special in C, can implicitly return 0
+                    errors.push(format!(
+                        "Function '{}' has return type {:?} but no return statement",
+                        ctx.function_name, ctx.return_type
+                    ));
+                }
+            }
+
+            // Restore the old context
+            *function_context = old_context;
 
             // Exit function scope
             symbol_table.exit_scope();
         }
 
+        ASTNodeType::ReturnStatement => {
+            // Check if we're in a function context
+            if let Some(ctx) = function_context.as_mut() {
+                // Mark that we've found a return statement
+                ctx.has_return = true;
+
+                // Check return value type if present
+                if !node.children.is_empty() {
+                    let return_expr = &node.children[0];
+                    match type_checker::check_types(return_expr, symbol_table) {
+                        Ok(expr_type) => {
+                            // Check compatibility with function return type
+                            if !is_type_compatible(&ctx.return_type, &expr_type) {
+                                errors.push(format!(
+                                    "Return type mismatch in function '{}': expected {:?}, found {:?}",
+                                    ctx.function_name, ctx.return_type, expr_type
+                                ));
+                            }
+                        }
+                        Err(e) => errors.push(format!("Error in return expression: {}", e)),
+                    }
+                } else if !matches!(ctx.return_type, symbol_table::Type::Void) {
+                    // Empty return in non-void function
+                    errors.push(format!(
+                        "Function '{}' has return type {:?} but empty return statement",
+                        ctx.function_name, ctx.return_type
+                    ));
+                }
+            } else {
+                errors.push("Return statement outside of function".to_string());
+            }
+        }
+
+        // The rest of the match cases remain the same, but we need to pass the function context
         ASTNodeType::VariableDeclaration => {
+            // Code remains the same but we need to pass function_context to recursive calls
             // Extract variable name and type
             let name = match &node.value {
                 Some(name) => name.clone(),
@@ -177,9 +252,9 @@ fn analyze_node(
                     Ok(init_type) => {
                         if !is_type_compatible(&var_type, &init_type) {
                             errors.push(format!(
-															"Type mismatch in variable initialization: cannot assign {:?} to {:?}",
-															init_type, var_type
-													));
+                                "Type mismatch in variable initialization: cannot assign {:?} to {:?}",
+                                init_type, var_type
+                            ));
                         }
                     }
                     Err(e) => errors.push(format!("Error in initializer: {}", e)),
@@ -193,7 +268,7 @@ fn analyze_node(
 
             // Process all statements in the block
             for child in &node.children {
-                analyze_node(child, symbol_table, errors);
+                analyze_node(child, symbol_table, errors, function_context);
             }
 
             // Exit block scope
@@ -203,11 +278,12 @@ fn analyze_node(
         ASTNodeType::ExpressionStatement => {
             // Process the contained expression
             if !node.children.is_empty() {
-                analyze_node(&node.children[0], symbol_table, errors);
+                analyze_node(&node.children[0], symbol_table, errors, function_context);
             }
         }
 
         ASTNodeType::Assignment => {
+            // Same code, just pass function_context to recursive calls
             if node.children.len() != 2 {
                 errors.push("Assignment must have exactly two operands".to_string());
                 return;
@@ -253,6 +329,7 @@ fn analyze_node(
             }
         }
 
+        // Continue updating all other node cases to pass function_context
         ASTNodeType::IfStatement => {
             if node.children.is_empty() {
                 errors.push("If statement missing condition".to_string());
@@ -275,15 +352,16 @@ fn analyze_node(
 
             // Process then and else branches
             if node.children.len() > 1 {
-                analyze_node(&node.children[1], symbol_table, errors);
+                analyze_node(&node.children[1], symbol_table, errors, function_context);
             }
 
             if node.children.len() > 2 {
-                analyze_node(&node.children[2], symbol_table, errors);
+                analyze_node(&node.children[2], symbol_table, errors, function_context);
             }
         }
 
         ASTNodeType::WhileStatement | ASTNodeType::DoWhileStatement => {
+            // Same but pass function_context
             if node.children.len() < 2 {
                 errors.push(format!(
                     "{:?} statement must have condition and body",
@@ -314,10 +392,16 @@ fn analyze_node(
             }
 
             // Process loop body
-            analyze_node(&node.children[body_idx], symbol_table, errors);
+            analyze_node(
+                &node.children[body_idx],
+                symbol_table,
+                errors,
+                function_context,
+            );
         }
 
         ASTNodeType::ForStatement => {
+            // Same but pass function_context
             if node.children.len() < 4 {
                 errors.push(
                     "For statement must have initialization, condition, increment, and body"
@@ -327,7 +411,7 @@ fn analyze_node(
             }
 
             // Process initialization
-            analyze_node(&node.children[0], symbol_table, errors);
+            analyze_node(&node.children[0], symbol_table, errors, function_context);
 
             // Type check condition
             let condition = &node.children[1];
@@ -344,11 +428,12 @@ fn analyze_node(
             }
 
             // Process increment and body
-            analyze_node(&node.children[2], symbol_table, errors);
-            analyze_node(&node.children[3], symbol_table, errors);
+            analyze_node(&node.children[2], symbol_table, errors, function_context);
+            analyze_node(&node.children[3], symbol_table, errors, function_context);
         }
 
         ASTNodeType::CallExpression => {
+            // Same code but pass function_context to any recursive calls
             // Extract function name
             let func_name = match &node.value {
                 Some(name) => name,
@@ -396,28 +481,13 @@ fn analyze_node(
                         Ok(arg_type) => {
                             if !is_type_compatible(param_type, &arg_type) {
                                 errors.push(format!(
-																	"Type mismatch in argument {} of call to '{}': expected {:?}, got {:?}",
-																	i + 1, func_name, param_type, arg_type
-															));
+                                    "Type mismatch in argument {} of call to '{}': expected {:?}, got {:?}",
+                                    i + 1, func_name, param_type, arg_type
+                                ));
                             }
                         }
                         Err(e) => errors.push(format!("Error in function argument: {}", e)),
                     }
-                }
-            }
-        }
-
-        ASTNodeType::ReturnStatement => {
-            // Type check return value if present
-            if !node.children.is_empty() {
-                let return_expr = &node.children[0];
-                match type_checker::check_types(return_expr, symbol_table) {
-                    Ok(_) => {
-                        // In a complete implementation, we would check that return type
-                        // matches the function's declared return type
-                        // This would require tracking current function context
-                    }
-                    Err(e) => errors.push(format!("Error in return expression: {}", e)),
                 }
             }
         }
@@ -444,11 +514,12 @@ fn analyze_node(
         // For any unhandled node types, recursively process children
         _ => {
             for child in &node.children {
-                analyze_node(child, symbol_table, errors);
+                analyze_node(child, symbol_table, errors, function_context);
             }
         }
     }
 }
+
 // Helper functions for type handling
 fn parse_type_string(type_str: &str) -> Result<symbol_table::Type, String> {
     match type_str {
