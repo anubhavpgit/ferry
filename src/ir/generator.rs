@@ -132,7 +132,7 @@ impl IRGenerator {
         };
 
         // Create alloca instruction
-        let mut alloca_node =
+        let alloca_node =
             IRNode::new(IRNodeType::Alloca, Some(var_name.clone())).with_type(var_type.clone());
 
         // Register variable in symbol table
