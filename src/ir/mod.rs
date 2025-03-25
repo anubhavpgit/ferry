@@ -9,7 +9,7 @@ pub fn generate_ir(ast: &ast::ASTNode) -> Result<types::IRNode, String> {
     let mut generator = IRGenerator::new();
     let ir_head = generator.generate(ast)?;
 
-    // optimiser::optimize_ir(&ir_head)?;
+    optimiser::optimise_ir(ir_head.clone())?;
 
     // DEBUG
     println!("IR Structure:");
