@@ -20,6 +20,17 @@ pub fn process_preprocessor_directives(ast: &ASTNode, symbol_table: &mut SymbolT
     process_directives_recursive(ast, symbol_table, &header_map);
 }
 
+pub fn remove_preprocessor_nodes(node: &mut ASTNode) {
+    // Remove child nodes that are preprocessor directives
+    node.children
+        .retain(|child| child.node_type != ASTNodeType::PreprocessorDirective);
+
+    // Recursively process remaining children
+    for child in &mut node.children {
+        remove_preprocessor_nodes(child);
+    }
+}
+
 /// Recursively process preprocessor directives in the AST
 fn process_directives_recursive(
     node: &ASTNode,

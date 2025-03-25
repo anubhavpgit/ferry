@@ -4,22 +4,24 @@ pub mod type_checker;
 
 use crate::parser::ast::ASTNode;
 use crate::parser::types::ASTNodeType;
-use crate::semantic::preprocessor::process_preprocessor_directives;
+use crate::semantic::preprocessor::{process_preprocessor_directives, remove_preprocessor_nodes};
 use crate::semantic::type_checker::is_type_compatible;
 
-pub fn analyze_semantics(ast: &ASTNode) -> Result<(), String> {
+pub fn analyze_semantics(mut ast: ASTNode) -> Result<ASTNode, String> {
     // Main entry point for semantic analysis
     let mut errors = Vec::new();
     let mut symbol_table = symbol_table::SymbolTable::new();
     let mut function_context = None;
 
-    process_preprocessor_directives(ast, &mut symbol_table);
+    process_preprocessor_directives(&ast, &mut symbol_table);
+    // Remove preprocessor directives from the AST
+    remove_preprocessor_nodes(&mut ast);
 
     // Traverse AST and analyze
-    analyze_node(ast, &mut symbol_table, &mut errors, &mut function_context);
+    analyze_node(&ast, &mut symbol_table, &mut errors, &mut function_context);
 
     if errors.is_empty() {
-        Ok(())
+        Ok(ast)
     } else {
         // Format all errors into a single string
         Err(format!("{}", errors.join("\n")))
@@ -119,7 +121,7 @@ fn analyze_node(
             symbol_table.enter_scope();
 
             // Create new function context
-            let mut new_context = FunctionContext {
+            let new_context = FunctionContext {
                 function_name: name.clone(),
                 return_type: return_type.clone(),
                 has_return: false,

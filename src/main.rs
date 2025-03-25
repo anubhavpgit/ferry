@@ -1,4 +1,5 @@
 mod codegen;
+mod ir;
 mod parser;
 mod semantic;
 
@@ -62,13 +63,13 @@ fn main() {
 
 fn compile(file: String) -> Result<bool, String> {
     // Parse the source code
-    let ast = parse_source(&file)?; // Parse the source code into an AST
+    let mut ast = parse_source(&file)?; // Parse the source code into an AST
 
     // Perform semantic analysis
-    semantic::analyze_semantics(&ast)?; // Perform semantic analysis on the AST
+    ast = semantic::analyze_semantics(ast)?; // Perform semantic analysis on the AST
 
     // Generate code from the AST
-    // let ir = codegen::generate_ir(&analyzed_ast)?;
+    ir::generate_ir(&ast)?;
     // println!("Intermediate representation generated successfully");
 
     // Assembly generation

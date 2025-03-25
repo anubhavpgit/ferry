@@ -186,7 +186,7 @@ pub enum DataType {
     Union,
     Enum,
 }
-#[derive(Debug)]
+#[derive(PartialEq, Debug)]
 pub enum ASTNodeType {
     // Top-level constructs
     Program,
