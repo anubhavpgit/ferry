@@ -152,6 +152,29 @@ impl<'a> Parser<'a> {
 
         Ok(expr)
     }
+    pub fn parse_postfix(&mut self) -> Result<ASTNode, String> {
+        // First parse the primary expression (variable, literal, etc.)
+        let mut expr = self.parse_primary()?;
+
+        // Check if it's followed by a postfix operator (++ or --)
+        if self.match_token(&[TokenType::Increment, TokenType::Decrement]) {
+            let operator = match self.previous().token_type {
+                TokenType::Increment => "++",
+                TokenType::Decrement => "--",
+                _ => unreachable!(),
+            };
+
+            // Create a unary expression for the postfix operator
+            let mut postfix_expr = ASTNode::new(
+                ASTNodeType::UnaryExpression,
+                Some(format!("post{}", operator)),
+            );
+            postfix_expr.add_child(expr);
+            expr = postfix_expr;
+        }
+
+        Ok(expr)
+    }
 
     pub fn parse_unary(&mut self) -> Result<ASTNode, String> {
         if self.match_token(&[TokenType::Bang, TokenType::Minus]) {
@@ -168,7 +191,7 @@ impl<'a> Parser<'a> {
             return Ok(unary_expr);
         }
 
-        self.parse_primary()
+        self.parse_postfix()
     }
     // We also need to enhance parse_primary to handle function calls
     pub fn parse_primary(&mut self) -> Result<ASTNode, String> {

@@ -70,10 +70,17 @@ pub fn check_unary_expression(node: &ASTNode, symbol_table: &SymbolTable) -> Res
                 operand_type
             )),
         },
+        // Add support for postfix operators
+        "post++" | "post--" => match operand_type {
+            Type::Int | Type::Float | Type::Double => Ok(operand_type),
+            _ => Err(format!(
+                "Increment/decrement operator requires numeric operand, got {:?}",
+                operand_type
+            )),
+        },
         _ => Err(format!("Unsupported unary operator '{}'", operator)),
     }
 }
-
 pub fn check_function_call(node: &ASTNode, symbol_table: &SymbolTable) -> Result<Type, String> {
     let func_name = node
         .value

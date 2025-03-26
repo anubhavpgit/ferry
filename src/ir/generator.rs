@@ -321,6 +321,62 @@ impl IRGenerator {
             Err("Empty expression".to_string())
         }
     }
+    fn generate_unary_expression(&mut self, ast: &ASTNode) -> Result<IRNode, String> {
+        if ast.children.len() != 1 {
+            return Err("Unary expression requires exactly one operand".to_string());
+        }
+        let operator = ast.value.clone().unwrap_or_else(|| "!".to_string());
+
+        // Handle postfix operators
+        if operator == "post++" || operator == "post--" {
+            // Get the operand (should be a variable)
+            let operand = &ast.children[0];
+            if operand.node_type != ASTNodeType::Variable {
+                return Err("Operand of postfix operator must be a variable".to_string());
+            }
+
+            let var_name = operand
+                .value
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+
+            // 1. Create a block to hold multiple instructions
+            let mut block = IRNode::new(IRNodeType::BasicBlock, None);
+
+            // 2. Load the variable's current value
+            let var_ref = IRNode::new(IRNodeType::Variable, Some(var_name.clone()));
+            let mut load = IRNode::new(IRNodeType::Load, None);
+            load.add_child(var_ref.clone());
+            block.add_child(load.clone());
+
+            // 3. Create the increment/decrement operation
+            let mut binary_op = IRNode::new(
+                IRNodeType::BinaryOp,
+                Some(if operator == "post++" { "+" } else { "-" }.to_string()),
+            );
+            binary_op.add_child(load);
+            let one =
+                IRNode::new(IRNodeType::Constant, Some("1".to_string())).with_type(IRType::Int32);
+            binary_op.add_child(one);
+
+            // 4. Store the new value back to the variable
+            let mut store = IRNode::new(IRNodeType::Store, None);
+            store.add_child(binary_op);
+            store.add_child(var_ref);
+            block.add_child(store);
+
+            return Ok(block);
+        }
+
+        // Handle standard unary operators
+        let mut unary_op = IRNode::new(IRNodeType::UnaryOp, Some(operator));
+
+        // Generate the operand
+        let operand = self.generate(&ast.children[0])?;
+        unary_op.add_child(operand);
+
+        Ok(unary_op)
+    }
 
     // Generate IR for binary expressions (e.g., a + b)
     fn generate_binary_expression(&mut self, ast: &ASTNode) -> Result<IRNode, String> {
@@ -339,22 +395,6 @@ impl IRGenerator {
         binary_op.add_child(right);
 
         Ok(binary_op)
-    }
-
-    // Generate IR for unary expressions (e.g., !a, -b)
-    fn generate_unary_expression(&mut self, ast: &ASTNode) -> Result<IRNode, String> {
-        if ast.children.len() != 1 {
-            return Err("Unary expression requires exactly one operand".to_string());
-        }
-
-        let operator = ast.value.clone().unwrap_or_else(|| "!".to_string());
-        let mut unary_op = IRNode::new(IRNodeType::UnaryOp, Some(operator));
-
-        // Generate the operand
-        let operand = self.generate(&ast.children[0])?;
-        unary_op.add_child(operand);
-
-        Ok(unary_op)
     }
 
     // Generate IR for function calls
