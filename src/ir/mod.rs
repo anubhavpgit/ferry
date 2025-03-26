@@ -7,9 +7,20 @@ use crate::parser::ast;
 
 pub fn generate_ir(ast: &ast::ASTNode) -> Result<types::IRNode, String> {
     let mut generator = IRGenerator::new();
-    let ir_head = generator.generate(ast)?;
+    let mut ir_head = generator.generate(ast)?;
 
-    optimiser::optimise_ir(ir_head.clone())?;
+    // DEBUG
+    println!("IR Structure:");
+    println!("└── Root");
+    for (i, node) in ir_head.children.iter().enumerate() {
+        let is_last = i == ir_head.children.len() - 1;
+        print_ir_node(node, "", is_last);
+    }
+    println!("\nIR generated successfully\n");
+
+    print!("\n---------Optimised---------\n");
+
+    ir_head = optimiser::optimise_ir(ir_head.clone())?;
 
     // DEBUG
     println!("IR Structure:");

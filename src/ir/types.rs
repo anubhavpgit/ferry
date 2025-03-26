@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IRNodeType {
     // Program structure
     Module,
@@ -29,7 +29,7 @@ pub enum IRNodeType {
     Type, // Type information
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IRNode {
     pub node_type: IRNodeType,
     pub value: Option<String>,
@@ -38,7 +38,7 @@ pub struct IRNode {
 }
 
 // Type system for IR
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IRType {
     Void,
     Int32,
