@@ -1,5 +1,6 @@
+mod advanced_optimiser;
+mod basic_optimiser;
 mod generator;
-mod optimiser;
 mod types;
 
 use self::generator::IRGenerator;
@@ -18,9 +19,22 @@ pub fn generate_ir(ast: &ast::ASTNode) -> Result<types::IRNode, String> {
     }
     println!("\nIR generated successfully\n");
 
-    print!("\n---------Optimised---------\n");
+    print!("\n---------Basic Optimised---------\n");
 
-    ir_head = optimiser::optimise_ir(ir_head.clone())?;
+    ir_head = basic_optimiser::optimise_ir(ir_head.clone())?;
+
+    // DEBUG
+    println!("IR Structure:");
+    println!("└── Root");
+    for (i, node) in ir_head.children.iter().enumerate() {
+        let is_last = i == ir_head.children.len() - 1;
+        print_ir_node(node, "", is_last);
+    }
+    println!("\nIR generated successfully\n");
+
+    ir_head = advanced_optimiser::optimise_ir(ir_head.clone())?;
+
+    print!("\n---------Advanced Optimised---------\n");
 
     // DEBUG
     println!("IR Structure:");
