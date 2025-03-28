@@ -88,47 +88,31 @@ fn register_stdio_functions(symbol_table: &mut SymbolTable) {
     let void_ptr_type = Type::Pointer(Box::new(void_type.clone()));
     let file_ptr_type = Type::Pointer(Box::new(void_type.clone())); // FILE* simplification
 
-    // printf (simplified - real printf has variable arguments)
-    let printf_type = Type::Function {
-        return_type: Box::new(int_type.clone()),
-        params: vec![char_ptr_type.clone()], // Format string
-    };
+    // Register printf and scanf as variadic functions
+    let printf_type = Type::Variadic(Box::new(int_type.clone()));
     let _ = symbol_table.define("printf".to_string(), printf_type, true);
 
-    // fprintf
-    let fprintf_type = Type::Function {
-        return_type: Box::new(int_type.clone()),
-        params: vec![file_ptr_type.clone(), char_ptr_type.clone()], // FILE*, format string
-    };
-    let _ = symbol_table.define("fprintf".to_string(), fprintf_type, true);
-
-    // scanf (simplified)
-    let scanf_type = Type::Function {
-        return_type: Box::new(int_type.clone()),
-        params: vec![char_ptr_type.clone()], // Format string
-    };
+    let scanf_type = Type::Variadic(Box::new(int_type.clone()));
     let _ = symbol_table.define("scanf".to_string(), scanf_type, true);
 
-    // fscanf
-    let fscanf_type = Type::Function {
-        return_type: Box::new(int_type.clone()),
-        params: vec![file_ptr_type.clone(), char_ptr_type.clone()], // FILE*, format string
-    };
+    let fprintf_type = Type::Variadic(Box::new(int_type.clone()));
+    let _ = symbol_table.define("fprintf".to_string(), fprintf_type, true);
+
+    let sprintf_type = Type::Variadic(Box::new(int_type.clone()));
+    let _ = symbol_table.define("sprintf".to_string(), sprintf_type, true);
+
+    let fscanf_type = Type::Variadic(Box::new(int_type.clone()));
     let _ = symbol_table.define("fscanf".to_string(), fscanf_type, true);
 
-    // fopen
+    let sscanf_type = Type::Variadic(Box::new(int_type.clone()));
+    let _ = symbol_table.define("sscanf".to_string(), sscanf_type, true);
+
+    // Non-variadic functions
     let fopen_type = Type::Function {
         return_type: Box::new(file_ptr_type.clone()),
         params: vec![char_ptr_type.clone(), char_ptr_type.clone()], // filename, mode
     };
     let _ = symbol_table.define("fopen".to_string(), fopen_type, true);
-
-    // fclose
-    let fclose_type = Type::Function {
-        return_type: Box::new(int_type.clone()),
-        params: vec![file_ptr_type.clone()], // FILE*
-    };
-    let _ = symbol_table.define("fclose".to_string(), fclose_type, true);
 
     // fgetc
     let fgetc_type = Type::Function {

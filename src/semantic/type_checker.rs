@@ -61,6 +61,10 @@ pub fn check_unary_expression(node: &ASTNode, symbol_table: &SymbolTable) -> Res
                 ))
             }
         }
+        "&" => {
+            // Address-of operator returns a pointer to the operand type
+            Ok(Type::Pointer(Box::new(operand_type)))
+        }
         "-" => match operand_type {
             Type::Int => Ok(Type::Int),
             Type::Float => Ok(Type::Float),
@@ -92,6 +96,82 @@ pub fn check_function_call(node: &ASTNode, symbol_table: &SymbolTable) -> Result
         .ok_or_else(|| format!("Undefined function '{}'", func_name))?;
 
     match &symbol.symbol_type {
+        Type::Variadic(return_type) => {
+            // Ensure at least one argument (format string)
+            if node.children.len() <= 1 {
+                return Err(format!(
+                    "Function '{}' requires at least a format string argument",
+                    func_name
+                ));
+            }
+
+            // Check that the first argument is a string
+            let format_arg = &node.children[1];
+            let format_type = check_types(format_arg, symbol_table)?;
+
+            if !matches!(format_type, Type::Pointer(t) if matches!(*t, Type::Char)) {
+                return Err(format!(
+                    "First argument to '{}' must be a format string",
+                    func_name
+                ));
+            }
+
+            // Add this section to validate format strings if possible
+            // Only perform validation if the format string is a literal that we can inspect
+            if let ASTNodeType::Literal = format_arg.node_type {
+                if let Some(format_str) = &format_arg.value {
+                    if format_str.starts_with('"') && format_str.ends_with('"') {
+                        // Extract the actual string content (remove quotes)
+                        let content = &format_str[1..format_str.len() - 1];
+
+                        // Get remaining arguments (excluding function name and format string)
+                        let args = &node.children[2..];
+
+                        // Determine if this is a scanf-family function
+                        let is_scanf = func_name.contains("scanf");
+
+                        // Validate format string against arguments
+                        if let Err(err) =
+                            validate_format_string(content, args, symbol_table, is_scanf)
+                        {
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+
+            // For scanf-family functions, check that remaining arguments are addresses
+            if func_name.contains("scanf") {
+                for i in 2..node.children.len() {
+                    if let ASTNodeType::UnaryExpression = node.children[i].node_type {
+                        if let Some(op) = &node.children[i].value {
+                            if op != "&" {
+                                return Err(format!(
+                                    "Argument {} to {} should use the address-of operator",
+                                    i - 1,
+                                    func_name
+                                ));
+                            }
+                        } else {
+                            return Err(format!(
+                                "Argument {} to {} should use the address-of operator",
+                                i - 1,
+                                func_name
+                            ));
+                        }
+                    } else {
+                        return Err(format!(
+                            "Argument {} to {} should use the address-of operator",
+                            i - 1,
+                            func_name
+                        ));
+                    }
+                }
+            }
+
+            // Return the function's return type
+            Ok(*return_type.clone())
+        }
         Type::Function {
             return_type,
             params,
@@ -472,6 +552,16 @@ pub fn is_type_compatible(target_type: &Type, value_type: &Type) -> bool {
         (Type::Char, Type::Char) => true,
         (Type::Void, Type::Void) => true,
 
+        (Type::Pointer(target_inner), _) if matches!(**target_inner, Type::Char) => {
+            // Allow string literals to be assigned to char* (for printf format strings)
+            if let Type::Pointer(value_inner) = value_type {
+                if matches!(**value_inner, Type::Char) {
+                    return true;
+                }
+            }
+            false
+        }
+
         // Pointer types
         (Type::Pointer(target_inner), Type::Pointer(value_inner)) => {
             is_type_compatible(target_inner, value_inner)
@@ -536,6 +626,106 @@ pub fn is_type_compatible(target_type: &Type, value_type: &Type) -> bool {
         (Type::Struct(target_name), Type::Struct(value_name)) => target_name == value_name,
 
         // For any other combinations, types are not compatible
+        _ => false,
+    }
+}
+
+fn validate_format_string(
+    format_str: &str,
+    args: &[ASTNode],
+    symbol_table: &SymbolTable,
+    is_scanf: bool,
+) -> Result<(), String> {
+    // Extract format specifiers (%d, %s, etc.)
+    let format_specifiers = extract_format_specifiers(format_str);
+
+    // Check the number of format specifiers matches the number of arguments
+    if format_specifiers.len() != args.len() {
+        return Err(format!(
+            "Number of format specifiers ({}) doesn't match number of arguments ({})",
+            format_specifiers.len(),
+            args.len()
+        ));
+    }
+
+    // Check each format specifier against the corresponding argument
+    for (i, specifier) in format_specifiers.iter().enumerate() {
+        let arg = &args[i];
+        let arg_type = check_types(arg, symbol_table)?;
+
+        if !is_type_compatible_with_format_specifier(specifier, &arg_type, is_scanf) {
+            return Err(format!(
+                "Argument {} type mismatch for format specifier '{}'",
+                i + 1,
+                specifier
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn extract_format_specifiers(format_str: &str) -> Vec<String> {
+    // Extract format specifiers like %d, %s, etc.
+    let mut specifiers = Vec::new();
+    let mut chars = format_str.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            if let Some(&next) = chars.peek() {
+                if next != '%' {
+                    // Found a format specifier
+                    let mut specifier = String::from('%');
+                    specifier.push(next);
+                    specifiers.push(specifier);
+                }
+                // Skip the character after %
+                chars.next();
+            }
+        }
+    }
+
+    specifiers
+}
+
+fn is_type_compatible_with_format_specifier(
+    specifier: &str,
+    arg_type: &Type,
+    is_scanf: bool,
+) -> bool {
+    match specifier {
+        "%d" | "%i" => {
+            if is_scanf {
+                // For scanf, need a pointer to int
+                matches!(arg_type, Type::Pointer(t) if matches!(**t, Type::Int))
+            } else {
+                // For printf, need an int
+                matches!(arg_type, Type::Int)
+            }
+        }
+        "%f" => {
+            if is_scanf {
+                // For scanf, need a pointer to float
+                matches!(arg_type, Type::Pointer(t) if matches!(**t, Type::Float))
+            } else {
+                // For printf, need a float
+                matches!(arg_type, Type::Float)
+            }
+        }
+        "%c" => {
+            if is_scanf {
+                // For scanf, need a pointer to char
+                matches!(arg_type, Type::Pointer(t) if matches!(**t, Type::Char))
+            } else {
+                // For printf, need a char
+                matches!(arg_type, Type::Char)
+            }
+        }
+        "%s" => {
+            // For both printf and scanf, need a char* (string)
+            matches!(arg_type, Type::Pointer(t) if matches!(**t, Type::Char))
+        }
+        // Add other format specifiers as needed
         _ => false,
     }
 }

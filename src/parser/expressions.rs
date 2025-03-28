@@ -181,7 +181,7 @@ impl<'a> Parser<'a> {
             let operator = match self.previous().token_type {
                 TokenType::Bang => "!",
                 TokenType::Minus => "-",
-                TokenType::BitwiseAnd => "&", // Add support for address-of operator
+                TokenType::BitwiseAnd => "&", // Address-of operator
                 _ => unreachable!(),
             };
             let right = self.parse_unary()?;

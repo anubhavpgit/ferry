@@ -19,6 +19,7 @@ pub enum Type {
         element_type: Box<Type>,
         size: Option<usize>,
     },
+    Variadic(Box<Type>), // For variadic function return types
 }
 
 #[derive(Debug)]
