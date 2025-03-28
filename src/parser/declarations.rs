@@ -33,7 +33,7 @@ impl<'a> Parser<'a> {
         if self.check(TokenType::LeftParen) {
             self.parse_function_declaration(data_type, name)
         } else {
-            self.parse_variable_declaration_with_type(data_type, name)
+            self.parse_variable_declaration_with_type()
         }
     }
 
@@ -108,37 +108,73 @@ impl<'a> Parser<'a> {
         Ok(func_node)
     }
 
-    pub fn parse_variable_declaration_with_type(
-        &mut self,
-        data_type: DataType,
-        identifier: String,
-    ) -> Result<ASTNode, String> {
-        // Create variable declaration node
-        let mut var_node = ASTNode::new(ASTNodeType::VariableDeclaration, Some(identifier));
+    pub fn parse_variable_declaration_with_type(&mut self) -> Result<ASTNode, String> {
+        // Get the data type
+        let data_type = match &self.peek().token_type {
+            TokenType::Type(data_type) => {
+                let dt = *data_type;
+                self.advance();
+                dt
+            }
+            _ => return Err("Expected type specifier.".to_string()),
+        };
 
-        // Add type information as the first child
+        // Get the first variable identifier
+        let first_identifier = match &self.peek().token_type {
+            TokenType::Identifier(name) => {
+                let name_clone = name.clone();
+                self.advance();
+                name_clone
+            }
+            _ => return Err("Expected identifier after type specifier.".to_string()),
+        };
+
+        // Create a block node to contain multiple declarations
+        let mut block_node = ASTNode::new(ASTNodeType::BlockStatement, None);
+
+        // Process the first variable
+        let mut first_var = ASTNode::new(ASTNodeType::VariableDeclaration, Some(first_identifier));
         let type_node = ASTNode::new(ASTNodeType::Type, Some(format!("{:?}", data_type)));
-        var_node.add_child(type_node);
+        first_var.add_child(type_node);
 
-        // Check for initializer
-        if self.check(TokenType::Equal) {
-            self.advance(); // Consume '='
+        // Add the first variable to our block
+        block_node.add_child(first_var);
 
-            // Parse the initializer expression
-            let initializer = self.parse_expression()?;
-            var_node.add_child(initializer);
+        // Process any additional variables separated by commas
+        while self.check(TokenType::Comma) {
+            self.advance(); // Consume comma
+
+            // Get the next variable name
+            if let TokenType::Identifier(next_identifier) = &self.peek().token_type.clone() {
+                let next_name = next_identifier.clone();
+                self.advance(); // Consume identifier
+
+                // Create a new variable declaration with the same type
+                let mut next_var = ASTNode::new(ASTNodeType::VariableDeclaration, Some(next_name));
+                let next_type = ASTNode::new(ASTNodeType::Type, Some(format!("{:?}", data_type)));
+                next_var.add_child(next_type);
+
+                // Add it to our block
+                block_node.add_child(next_var);
+            } else {
+                return Err("Expected identifier after comma".to_string());
+            }
         }
-
-        // Verify declaration ends with a semicolon
+        // Consume the semicolon
         self.consume(
             TokenType::Semicolon,
             "Expected ';' after variable declaration.",
         )?;
 
-        Ok(var_node)
+        // If we only have one variable, return it directly
+        if block_node.children.len() == 1 {
+            return Ok(block_node.children.remove(0));
+        }
+        // Otherwise return the block with all declarations
+        Ok(block_node)
     }
-
     pub fn parse_variable_declaration(&mut self) -> Result<ASTNode, String> {
+        print!("Parsing variable declaration... ");
         // Get the data type
         let data_type = match &self.peek().token_type {
             TokenType::Type(data_type) => {

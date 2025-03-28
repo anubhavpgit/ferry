@@ -25,7 +25,8 @@ impl<'a> Parser<'a> {
             TokenType::LeftBrace => self.parse_block(),
 
             // Declarations
-            TokenType::Type(_) => self.parse_variable_declaration(),
+            // Error here: need to call parse_declaration_with_type(datatype, firstIdentifier ) instead of parse_declaration()
+            TokenType::Type(_) => self.parse_variable_declaration_with_type(),
 
             // Preprocessor directives
             TokenType::PreprocessorDirective(_) => self.parse_preprocessor(),

@@ -177,10 +177,11 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_unary(&mut self) -> Result<ASTNode, String> {
-        if self.match_token(&[TokenType::Bang, TokenType::Minus]) {
+        if self.match_token(&[TokenType::Bang, TokenType::Minus, TokenType::BitwiseAnd]) {
             let operator = match self.previous().token_type {
                 TokenType::Bang => "!",
                 TokenType::Minus => "-",
+                TokenType::BitwiseAnd => "&", // Add support for address-of operator
                 _ => unreachable!(),
             };
             let right = self.parse_unary()?;
