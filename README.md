@@ -40,7 +40,7 @@ For ARM64/macOS environments, you can use the included runner:
 cargo run --release --bin ferry -- input_file.c
 
 # Run the assembly using the provided runner
-cargo run --release --bin mac_os_runner -- input_file.s
+cargo run --release --bin runner -- input_file.s
 ```
 
 Alternatively, you can use an external assembler like `riscv64-unknown-elf-gcc` or an online assembler like [RISC-V Online Assembler](https://riscvasm.lucasteske.dev/).
