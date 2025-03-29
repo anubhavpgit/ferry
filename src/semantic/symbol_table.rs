@@ -82,13 +82,22 @@ impl SymbolTable {
 
         Ok(())
     }
-
     pub fn lookup(&self, name: &str) -> Option<&Symbol> {
-        for scope in self.scopes.iter().rev() {
+        // Search through all scopes from innermost to outermost
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
             if let Some(symbol) = scope.symbols.get(name) {
                 return Some(symbol);
             }
         }
         None
+    }
+
+    pub fn print_symbols(&self) {
+        for (i, scope) in self.scopes.iter().enumerate() {
+            println!("Scope {}:", i);
+            for (name, symbol) in &scope.symbols {
+                println!("  Symbol: {}, Type: {:?}", name, symbol.symbol_type);
+            }
+        }
     }
 }

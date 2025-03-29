@@ -270,7 +270,46 @@ fn analyze_node(
 
             // Process all statements in the block
             for child in &node.children {
-                analyze_node(child, symbol_table, errors, function_context);
+                // Special handling for variable declarations in blocks
+                if matches!(child.node_type, ASTNodeType::VariableDeclaration) {
+                    // IMPORTANT: Register the variable but DON'T recursively analyze it again
+                    let name = match &child.value {
+                        Some(name) => name.clone(),
+                        None => {
+                            errors.push("Variable declaration missing name".to_string());
+                            continue;
+                        }
+                    };
+
+                    let var_type = if !child.children.is_empty()
+                        && matches!(child.children[0].node_type, ASTNodeType::Type)
+                    {
+                        match &child.children[0].value {
+                            Some(type_str) => match parse_type_string(type_str) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    errors.push(e);
+                                    symbol_table::Type::Void
+                                }
+                            },
+                            None => {
+                                errors.push("Variable type missing".to_string());
+                                symbol_table::Type::Void
+                            }
+                        }
+                    } else {
+                        errors.push("Variable declaration missing type".to_string());
+                        symbol_table::Type::Void
+                    };
+
+                    // Register variable in current scope
+                    if let Err(e) = symbol_table.define(name, var_type, false) {
+                        errors.push(e);
+                    }
+                } else {
+                    // Only recursively analyze non-variable-declaration nodes
+                    analyze_node(child, symbol_table, errors, function_context);
+                }
             }
 
             // Exit block scope
@@ -311,6 +350,7 @@ fn analyze_node(
             let target_type = match symbol_table.lookup(var_name) {
                 Some(symbol) => symbol.symbol_type.clone(),
                 None => {
+                    print!("Here");
                     errors.push(format!("Undefined variable '{}'", var_name));
                     return;
                 }
@@ -435,7 +475,6 @@ fn analyze_node(
         }
 
         ASTNodeType::CallExpression => {
-            // Same code but pass function_context to any recursive calls
             // Extract function name
             let func_name = match &node.value {
                 Some(name) => name,
@@ -444,14 +483,84 @@ fn analyze_node(
                     return;
                 }
             };
-
+        
             // Check if function exists and has correct type
-            let (return_type, params) = match symbol_table.lookup(func_name) {
+            match symbol_table.lookup(func_name) {
                 Some(symbol) => match &symbol.symbol_type {
                     symbol_table::Type::Function {
                         return_type,
                         params,
-                    } => (return_type.clone(), params.clone()),
+                    } => {
+                        // Check argument count (first child is callee)
+                        let arg_count = node.children.len() - 1;
+                        if arg_count != params.len() {
+                            errors.push(format!(
+                                "Function '{}' called with {} arguments, but expected {}",
+                                func_name, arg_count, params.len()
+                            ));
+                            return;
+                        }
+        
+                        // Type check each argument
+                        for (i, param_type) in params.iter().enumerate() {
+                            if i + 1 < node.children.len() {
+                                let arg = &node.children[i + 1];
+                                match type_checker::check_types(arg, symbol_table) {
+                                    Ok(arg_type) => {
+                                        if !is_type_compatible(param_type, &arg_type) {
+                                            errors.push(format!(
+                                                "Type mismatch in argument {} of call to '{}': expected {:?}, got {:?}",
+                                                i + 1, func_name, param_type, arg_type
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => errors.push(format!("Error in function argument: {}", e)),
+                                }
+                            }
+                        }
+                    },
+                    symbol_table::Type::Variadic(return_type) => {
+                        // For variadic functions like printf/scanf, we're more flexible
+                        // First argument (format string) should be handled specially
+                        if node.children.len() <= 1 {
+                            errors.push(format!(
+                                "Variadic function '{}' requires at least one argument",
+                                func_name
+                            ));
+                            return;
+                        }
+                        
+                        // Basic check for the format string argument (first argument)
+                        let format_arg = &node.children[1];
+                        match type_checker::check_types(format_arg, symbol_table) {
+                            Ok(arg_type) => {
+                                // Format string should typically be a char* (string)
+                                if !matches!(arg_type, symbol_table::Type::Pointer(t) 
+                                          if matches!(*t, symbol_table::Type::Char)) {
+                                    errors.push(format!(
+                                        "First argument to '{}' should be a format string",
+                                        func_name
+                                    ));
+                                }
+                            },
+                            Err(e) => errors.push(format!("Error in format string argument: {}", e)),
+                        }
+                        
+                        // For scanf-family functions, remaining args should be pointers
+                        if func_name.contains("scanf") {
+                            for i in 2..node.children.len() {
+                                let arg = &node.children[i];
+                                // Check for address-of operator (&) for scanf arguments
+                                if !matches!(arg.node_type, ASTNodeType::UnaryExpression) 
+                                    || arg.value.as_ref().map_or(true, |op| op != "&") {
+                                    errors.push(format!(
+                                        "Argument {} to {} should use the address-of operator (&)",
+                                        i - 1, func_name
+                                    ));
+                                }
+                            }
+                        }
+                    },
                     _ => {
                         errors.push(format!("'{}' is not a function", func_name));
                         return;
@@ -461,38 +570,8 @@ fn analyze_node(
                     errors.push(format!("Undefined function '{}'", func_name));
                     return;
                 }
-            };
-
-            // Check argument count (first child is callee)
-            let arg_count = node.children.len() - 1;
-            if arg_count != params.len() {
-                errors.push(format!(
-                    "Function '{}' called with {} arguments, but expected {}",
-                    func_name,
-                    arg_count,
-                    params.len()
-                ));
-                return;
             }
-
-            // Type check each argument
-            for (i, param_type) in params.iter().enumerate() {
-                if i + 1 < node.children.len() {
-                    let arg = &node.children[i + 1];
-                    match type_checker::check_types(arg, symbol_table) {
-                        Ok(arg_type) => {
-                            if !is_type_compatible(param_type, &arg_type) {
-                                errors.push(format!(
-                                    "Type mismatch in argument {} of call to '{}': expected {:?}, got {:?}",
-                                    i + 1, func_name, param_type, arg_type
-                                ));
-                            }
-                        }
-                        Err(e) => errors.push(format!("Error in function argument: {}", e)),
-                    }
-                }
-            }
-        }
+        },
 
         // These node types are handled by type_checker directly
         ASTNodeType::BinaryExpression
