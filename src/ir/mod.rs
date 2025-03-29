@@ -30,7 +30,7 @@ pub fn generate_ir(ast: &ast::ASTNode) -> Result<types::IRNode, String> {
         let is_last = i == ir_head.children.len() - 1;
         print_ir_node(node, "", is_last);
     }
-    println!("\nIR generated successfully\n");
+    println!("\nOptimised IR generated successfully\n");
 
     ir_head = advanced_optimiser::optimise_ir(ir_head.clone())?;
 
@@ -43,7 +43,7 @@ pub fn generate_ir(ast: &ast::ASTNode) -> Result<types::IRNode, String> {
         let is_last = i == ir_head.children.len() - 1;
         print_ir_node(node, "", is_last);
     }
-    println!("\nIR generated successfully\n");
+    println!("\n Advanced Optimised IR generated successfully\n");
 
     return Ok(ir_head); // Return the IR for the next compilation stage
 }
