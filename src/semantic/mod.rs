@@ -265,57 +265,76 @@ fn analyze_node(
         }
 
         ASTNodeType::BlockStatement => {
+            // First, check if this is a function body block with a nested declaration block
+            let is_function_body_with_declarations = 
+                !node.children.is_empty() && 
+                matches!(node.children[0].node_type, ASTNodeType::BlockStatement) &&
+                node.children[0].children.iter().all(|child| 
+                    matches!(child.node_type, ASTNodeType::VariableDeclaration)
+                );
+        
             // Create new scope for block
             symbol_table.enter_scope();
-
-            // Process all statements in the block
-            for child in &node.children {
-                // Special handling for variable declarations in blocks
-                if matches!(child.node_type, ASTNodeType::VariableDeclaration) {
-                    // IMPORTANT: Register the variable but DON'T recursively analyze it again
-                    let name = match &child.value {
-                        Some(name) => name.clone(),
-                        None => {
-                            errors.push("Variable declaration missing name".to_string());
-                            continue;
-                        }
-                    };
-
-                    let var_type = if !child.children.is_empty()
-                        && matches!(child.children[0].node_type, ASTNodeType::Type)
-                    {
-                        match &child.children[0].value {
-                            Some(type_str) => match parse_type_string(type_str) {
-                                Ok(t) => t,
-                                Err(e) => {
-                                    errors.push(e);
-                                    symbol_table::Type::Void
-                                }
-                            },
-                            None => {
-                                errors.push("Variable type missing".to_string());
-                                symbol_table::Type::Void
-                            }
-                        }
-                    } else {
-                        errors.push("Variable declaration missing type".to_string());
-                        symbol_table::Type::Void
-                    };
-
-                    // Register variable in current scope
-                    if let Err(e) = symbol_table.define(name, var_type, false) {
-                        errors.push(e);
-                    }
-                } else {
-                    // Only recursively analyze non-variable-declaration nodes
+        
+            // If this is a function with declaration block, handle it specially
+            if is_function_body_with_declarations {
+                let decl_block = &node.children[0];
+                
+                // Process all variable declarations in the declaration block
+                for var_decl in &decl_block.children {
+                    analyze_node(var_decl, symbol_table, errors, function_context);
+                }
+                
+                // Process all other statements in the function body
+                for child in &node.children[1..] {
                     analyze_node(child, symbol_table, errors, function_context);
                 }
+            } else {
+                // Regular block processing (unchanged)
+                for child in &node.children {
+                    if matches!(child.node_type, ASTNodeType::VariableDeclaration) {
+                        // Your existing variable declaration handling
+                        let name = match &child.value {
+                            Some(name) => name.clone(),
+                            None => {
+                                errors.push("Variable declaration missing name".to_string());
+                                continue;
+                            }
+                        };
+        
+                        let var_type = if !child.children.is_empty()
+                            && matches!(child.children[0].node_type, ASTNodeType::Type)
+                        {
+                            match &child.children[0].value {
+                                Some(type_str) => match parse_type_string(type_str) {
+                                    Ok(t) => t,
+                                    Err(e) => {
+                                        errors.push(e);
+                                        symbol_table::Type::Void
+                                    }
+                                },
+                                None => {
+                                    errors.push("Variable type missing".to_string());
+                                    symbol_table::Type::Void
+                                }
+                            }
+                        } else {
+                            errors.push("Variable declaration missing type".to_string());
+                            symbol_table::Type::Void
+                        };
+        
+                        if let Err(e) = symbol_table.define(name, var_type, false) {
+                            errors.push(e);
+                        }
+                    } else {
+                        analyze_node(child, symbol_table, errors, function_context);
+                    }
+                }
             }
-
+        
             // Exit block scope
             symbol_table.exit_scope();
         }
-
         ASTNodeType::ExpressionStatement => {
             // Process the contained expression
             if !node.children.is_empty() {
