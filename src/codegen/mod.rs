@@ -18,6 +18,7 @@ pub fn generate_riscv_assembly(ir: &IRNode) -> Result<String, String> {
 
     // Generate code for the IR tree
     generate_code(&mut context, ir)?;
+    print!("\n Assembly code generated successfully\n");
 
     Ok(context.finalize())
 }
