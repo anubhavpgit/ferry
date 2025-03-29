@@ -1,7 +1,7 @@
 mod advanced_optimiser;
 mod basic_optimiser;
 mod generator;
-mod types;
+pub mod types;
 
 use self::generator::IRGenerator;
 use crate::parser::ast;

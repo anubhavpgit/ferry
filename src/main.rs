@@ -23,7 +23,7 @@ fn main() {
 
     match filename.ends_with(".c") {
         true => match fs::read_to_string(filename) {
-            Ok(contents) => match compile(contents) {
+            Ok(contents) => match compile(contents, filename) {
                 Ok(true) => {
                     process::exit(0);
                 }
@@ -61,20 +61,18 @@ fn main() {
 
 */
 
-fn compile(file: String) -> Result<bool, String> {
+fn compile(file: String, filename: &str) -> Result<bool, String> {
     // Parse the source code
     let mut ast = parse_source(&file)?; // Parse the source code into an AST
-
-    // Perform semantic analysis
+                                        // Perform semantic analysis
     ast = semantic::analyze_semantics(ast)?; // Perform semantic analysis on the AST
-
-    // Generate code from the AST
-    ir::generate_ir(&ast)?;
-    // println!("Intermediate representation generated successfully");
-
+                                             // Generate code from the AST
+    let ir = ir::generate_ir(&ast)?;
     // Assembly generation
-    // let assembly = codegen::generate_assembly(&ir)?;
-    // println!("Assembly code generated successfully");
+    let assembly = codegen::generate_riscv_assembly(&ir)?;
+    // Write the assembly to a file
+    let output_file = format!("{}.s", &filename[..filename.len() - 2]);
+    fs::write(&output_file, assembly).map_err(|e| format!("Error writing to file: {}", e))?;
 
     Ok(true) // Return true to indicate successful compilation
              // Note: In a real-world scenario, you would also handle linking and outputting the final executable.
