@@ -8,7 +8,7 @@ name = "ferry"
 path = "src/main.rs"
 
 [[bin]]
-name = "mac_os_runner"
+name = "runner"
 path = "src/mac_os_runner.rs"
 
 [dependencies]
