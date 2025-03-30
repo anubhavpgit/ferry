@@ -32,6 +32,7 @@ impl IRGenerator {
             ASTNodeType::VariableDeclaration => self.generate_variable_declaration(ast),
             ASTNodeType::BlockStatement => self.generate_block(ast),
             ASTNodeType::ExpressionStatement => self.generate_expression_statement(ast),
+            ASTNodeType::BreakStatement => self.generate_break_statement(ast),
             ASTNodeType::IfStatement => self.generate_if_statement(ast),
             ASTNodeType::WhileStatement => self.generate_while_statement(ast),
             ASTNodeType::ForStatement => self.generate_for_statement(ast),
@@ -213,6 +214,14 @@ impl IRGenerator {
         }
 
         Ok(branch)
+    }
+
+    fn generate_break_statement(&mut self, _ast: &ASTNode) -> Result<IRNode, String> {
+        // Create a jump instruction with a label that indicates this is a break statement
+        // In a real compiler, this would jump to the exit point of the nearest enclosing loop
+        let break_jump = IRNode::new(IRNodeType::Jump, Some("loop.exit".to_string()));
+
+        Ok(break_jump)
     }
 
     // Generate IR for while loops
