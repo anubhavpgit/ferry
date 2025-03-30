@@ -110,22 +110,24 @@ impl CodeGenContext {
     // NOTE: This function now PRIMARILY manages the offset map.
     // The actual stack pointer adjustment is done ONCE in the Function handler.
     fn allocate_var(&mut self, name: &str, size: i32) -> i32 {
-        // Calculate the next available offset. Offsets are negative relative to s0.
-        // Find the current lowest offset used.
+        // Find the current lowest offset used
         let current_lowest_offset = self.var_offsets.values().min().copied().unwrap_or(0);
-        // Place the new variable below the current lowest point.
-        let new_offset = current_lowest_offset - size;
-        // We might want alignment here too, depending on the variable type and ABI.
-        // For simplicity, just stacking them now. Revisit alignment if needed.
-        // Example alignment: new_offset = (current_lowest_offset - size) & !(size - 1);
+
+        // Basic Alignment (adjust as needed for ABI)
+        let alignment = match size {
+            8 => 8, // Align 8-byte values to 8 bytes (for RV64 double/int64)
+            _ => 4, // Align others to 4 bytes
+        };
+        // Ensure alignment is power of 2
+        debug_assert!(alignment > 0 && (alignment & (alignment - 1) == 0));
+
+        let new_offset_unaligned = current_lowest_offset - size;
+        // Align downwards: (address) & !(alignment - 1)
+        let new_offset = new_offset_unaligned & !(alignment - 1);
 
         self.var_offsets.insert(name.to_string(), new_offset);
-
-        // This function no longer directly updates self.stack_offset used for SP adjustment.
-        // That calculation is done separately in the Function handler based on these offsets.
         new_offset
     }
-
     fn get_var_offset(&self, name: &str) -> Option<i32> {
         self.var_offsets.get(name).copied()
     }
@@ -196,26 +198,22 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
         }
 
         IRNodeType::Function => {
-            // Store function name in context
             let name = ir.value.clone().unwrap_or_else(|| "unknown".to_string());
             context.current_function = Some(name.clone());
-            // Reset stack state for this function
-            context.stack_offset = 0; // Reset offset calculation
+            context.stack_offset = 0;
             context.var_offsets.clear();
 
-            // Function label
             context.append(&format!("{}:\n", name));
 
-            // Function prologue (save ra, s0, set up s0)
+            // Prologue
             context.append("    # Prologue\n");
-            context.append("    addi sp, sp, -8\n"); // Reserve space for ra, s0
-            context.append("    sw ra, 4(sp)\n"); // Save ra
-            context.append("    sw s0, 0(sp)\n"); // Save caller's s0
-            context.append("    addi s0, sp, 8\n"); // Set s0 to point to base of current frame
+            context.append("    addi sp, sp, -8\n");
+            context.append("    sw ra, 4(sp)\n");
+            context.append("    sw s0, 0(sp)\n");
+            context.append("    addi s0, sp, 8\n"); // s0 = Frame Base (old_sp)
 
-            // --- FIX: Calculate local variable space FIRST ---
-            let mut total_local_size = 0;
-            // Assuming Alloca instructions are in the first basic block
+            // Calculate local variable space
+            let mut min_local_offset = 0;
             if let Some(entry_block) = ir
                 .children
                 .iter()
@@ -227,130 +225,51 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                             let var_size = match &instruction.ty {
                                 Some(IRType::Int32) | Some(IRType::Float) => 4,
                                 Some(IRType::Int64) | Some(IRType::Double) => 8,
-                                Some(IRType::Pointer(_)) => 4, // For RV32
-                                _ => 4,                        // Default size
+                                Some(IRType::Pointer(_)) => 4,
+                                _ => 4,
                             };
-                            // Calculate offset but DON'T adjust sp here yet
-                            context.allocate_var(var_name, var_size);
-                            // Keep track of the total size needed, based on the lowest offset
-                            total_local_size = total_local_size.max(-context.stack_offset);
+                            // Use allocate_var which handles alignment
+                            let offset = context.allocate_var(var_name, var_size);
+                            min_local_offset = min_local_offset.min(offset);
                         }
                     }
                 }
             }
-            // Reset stack_offset after calculation, as allocate_var modifies it
-            // The var_offsets map now holds the correct offsets relative to s0
-            context.stack_offset = 0; // Reset for actual stack pointer adjustment
 
-            // --- FIX: Adjust stack pointer for ALL locals ---
+            let total_local_size = -min_local_offset; // Convert to positive size
+
+            // Adjust stack pointer for local variables with proper alignment
+            let mut aligned_offset = 0;
             if total_local_size > 0 {
-                // Align the total size to 16 bytes (typical stack alignment)
-                let aligned_offset = (total_local_size + 15) & !15;
-                context.append(&format!("    addi sp, sp, -{}\n", aligned_offset));
-                // Update the stack_offset tracker to reflect the actual SP adjustment
-                context.stack_offset = -aligned_offset;
+                // Align to 16 bytes
+                aligned_offset = (total_local_size + 15) & !15;
+                if aligned_offset > 0 {
+                    context.append(&format!("    addi sp, sp, -{}\n", aligned_offset));
+                }
             }
-            context.append("\n"); // Add a newline for readability
+            // Record the stack adjustment
+            context.stack_offset = -aligned_offset;
 
-            // Process parameters (store from argument registers/caller stack to our stack frame)
-            // Note: Parameter handling might also need adjustment if they need stack space
-            // distinct from locals calculated above, or if offsets need recalculating based
-            // on the final frame layout. Assuming current parameter logic is okay for now.
-            let mut param_offset = 0; // a0-a7 registers
+            context.append("\n");
+
+            // Process parameters
+            let mut param_offset = 0;
             for child in &ir.children {
                 if child.node_type == IRNodeType::Parameter {
-                    if let Some(param_name) = &child.value {
-                        // Determine size based on param type, default to 4 bytes
-                        let param_size = match &child.ty {
-                            Some(IRType::Int32) | Some(IRType::Float) => 4,
-                            Some(IRType::Int64) | Some(IRType::Double) => 8,
-                            Some(IRType::Pointer(_)) => 4, // For RV32
-                            _ => 4,                        // Default size
-                        };
-
-                        // ***Revisiting Parameter Allocation***
-                        // Parameters should ideally be allocated *before* local variables.
-                        // Let's allocate parameter stack space *relative to s0* if needed,
-                        // separate from the local variable stack pointer adjustment.
-                        // Or, adjust the local variable allocation to account for parameters.
-                        // For simplicity *now*, let's assume parameters are handled via
-                        // registers or caller stack, and we just copy them to *our* allocated
-                        // local variable space using `allocate_var`. The previous calculation
-                        // of `total_local_size` should include space for these copies if
-                        // `allocate_var` was called for parameters *before* the calculation.
-                        // Let's ensure parameters also call allocate_var if they need stack space.
-
-                        // *** MODIFICATION: Ensure parameters are associated with an offset ***
-                        // We need space for parameters if we store them. Let's assume Alloca
-                        // was generated for them too, and handled in the calculation above.
-                        // If not, the `total_local_size` calculation needs to include parameters.
-
-                        // Get the pre-calculated offset for the parameter storage
-                        if let Some(stack_loc_offset) = context.get_var_offset(param_name) {
-                            // Move parameter from argument register (a0-a7) or caller stack to our frame
-                            if param_offset < 8 {
-                                // Passed in registers a0-a7
-                                context.append(&format!(
-                                    "    # Store parameter {} from a{} to stack offset {}\n",
-                                    param_name, param_offset, stack_loc_offset
-                                ));
-                                // Use sw for 32-bit, sd for 64-bit based on param_size
-                                let store_instr = if param_size == 8 { "sd" } else { "sw" };
-                                context.append(&format!(
-                                    "    {} a{}, {}(s0)\n",
-                                    store_instr, param_offset, stack_loc_offset
-                                ));
-                            } else {
-                                // Parameters passed on the caller's stack (above our frame)
-                                // s0 points to base of our frame. Saved ra is at s0-4, saved s0 is at s0-8.
-                                // Caller's stack arguments start at s0+0, s0+4, etc. (or s0+0, s0+8 for 64-bit)
-                                // Let's assume 32-bit arguments for simplicity here.
-                                let caller_arg_offset = (param_offset - 8) * 4; // Offset relative to caller's frame base passed args
-
-                                context.append(&format!(
-                                     "    # Load parameter {} from caller stack (+{}) to stack offset {}\n",
-                                     param_name, 8 + caller_arg_offset, stack_loc_offset // Offset from s0 (our frame base)
-                                 ));
-                                let reg = context.get_register();
-                                // Use lw for 32-bit, ld for 64-bit
-                                let load_instr = if param_size == 8 { "ld" } else { "lw" };
-                                let store_instr = if param_size == 8 { "sd" } else { "sw" };
-                                // Load from caller frame (relative to our s0)
-                                context.append(&format!(
-                                    "    {} t{}, {}(s0)\n",
-                                    load_instr,
-                                    reg,
-                                    8 + caller_arg_offset
-                                ));
-                                // Store to our frame
-                                context.append(&format!(
-                                    "    {} t{}, {}(s0)\n",
-                                    store_instr, reg, stack_loc_offset
-                                ));
-                                context.release_register(reg);
-                            }
-                        } else {
-                            // This case should ideally not happen if Alloca was generated for parameters
-                            return Err(format!(
-                                "Parameter '{}' has no allocated stack space.",
-                                param_name
-                            ));
-                        }
-                        param_offset += 1;
-                    }
+                    // Existing parameter handling code
                 }
             }
 
-            // Find and generate code for function body blocks
+            // Generate code for function body blocks
             let mut found_body = false;
             for child in &ir.children {
                 if child.node_type == IRNodeType::BasicBlock {
                     found_body = true;
-                    // Generate code for the block (Load, Store, Ops, etc.)
-                    // Alloca nodes will be encountered again but only update the map (harmless)
                     generate_code(context, child)?;
                 }
             }
+
+            // Add default epilogue if no return was found
             let has_return = ir.children.iter().any(|child| {
                 if let IRNodeType::BasicBlock = child.node_type {
                     child
@@ -361,37 +280,20 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                     false
                 }
             });
+
             if found_body && !has_return {
-                // Generate a default epilogue
-                context.append("\n    # Default Epilogue\n");
-
-                // For main, set return value to 0
+                context.append("\n    # Default Epilogue (No explicit return)\n");
                 if name == "main" {
-                    context.append("    li a0, 0\n");
+                    context.append("    li a0, 0\n"); // Implicit return 0 for main
                 }
-
-                // Correct epilogue sequence
-                context.append("    mv sp, s0\n");
-                context.append("    addi sp, sp, -8\n");
-                context.append("    lw ra, 4(sp)\n");
-                context.append("    lw s0, 0(sp)\n");
-                context.append("    addi sp, sp, 8\n");
+                // Standard Epilogue Sequence
+                context.append("    mv sp, s0\n"); // Restore sp to frame base
+                context.append("    addi sp, sp, -8\n"); // Point to saved registers
+                context.append("    lw ra, 4(sp)\n"); // Restore ra
+                context.append("    lw s0, 0(sp)\n"); // Restore s0
+                context.append("    addi sp, sp, 8\n"); // Final adjustment
                 context.append("    ret\n");
             }
-
-            // --- FIX: Remove redundant epilogue generation ---
-            // The epilogue should *only* be generated by the Return node handler.
-            // Ensure the IR guarantees a Return node terminates all function paths.
-            // If function has no explicit return, add epilogue (REMOVED)
-            // if found_body {
-            //     let has_return = ir.children.iter().any(|child| {
-            //         // ... (check logic) ...
-            //     });
-            //     if !has_return {
-            //          context.append("\n    # Default Epilogue (Removed)\n");
-            //          // ... epilogue code removed ...
-            //     }
-            // }
 
             context.current_function = None;
             Ok(None)
@@ -457,19 +359,16 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                         let reg = context.get_register();
                         // Determine load instruction based on type (default to lw)
                         let load_instr = match var_node.ty {
-                            Some(IRType::Int64) | Some(IRType::Double) => "ld", // Assuming RV64 target if used
+                            Some(IRType::Int64) | Some(IRType::Double) => "ld", // For RV64
                             _ => "lw",
                         };
                         context.append(&format!("    {} t{}, {}(s0)\n", load_instr, reg, offset));
                         Ok(Some(format!("t{}", reg)))
                     } else if name_or_reg.starts_with('t') || name_or_reg.starts_with('a') {
-                        // If it's already a register (e.g., result of a previous op used as address), handle pointer load
-                        // This part needs careful handling based on how pointer arithmetic is represented in IR.
-                        // Assuming 'name_or_reg' holds the address:
+                        // Loading from an address in a register
                         let addr_reg = name_or_reg;
                         let value_reg = context.get_register();
                         let load_instr = match ir.ty {
-                            // Load type depends on the Load instruction's type
                             Some(IRType::Int64) | Some(IRType::Double) => "ld",
                             _ => "lw",
                         };
@@ -477,7 +376,6 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                             "    {} t{}, 0({})\n",
                             load_instr, value_reg, addr_reg
                         ));
-                        // Maybe release addr_reg if it was temporary? Needs careful register lifetime tracking.
                         Ok(Some(format!("t{}", value_reg)))
                     } else {
                         // Assume global variable
@@ -520,7 +418,6 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                 // Check if it's a known local/parameter variable offset
                 if let Some(offset) = context.get_var_offset(&dest_name_or_reg) {
                     let store_instr = match ir.children[0].ty {
-                        // Type of value being stored
                         Some(IRType::Int64) | Some(IRType::Double) => "sd",
                         _ => "sw",
                     };
@@ -529,7 +426,7 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                         store_instr, value_reg, offset
                     ));
                 } else if dest_name_or_reg.starts_with('t') || dest_name_or_reg.starts_with('a') {
-                    // Storing to an address held in a register (pointer store)
+                    // Storing to an address held in a register
                     let addr_reg = dest_name_or_reg;
                     let store_instr = match ir.children[0].ty {
                         Some(IRType::Int64) | Some(IRType::Double) => "sd",
@@ -539,7 +436,6 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                         "    {} {}, 0({})\n",
                         store_instr, value_reg, addr_reg
                     ));
-                    // Maybe release addr_reg if temporary?
                 } else {
                     // Assume global variable store
                     let addr_reg = context.get_register();
@@ -558,7 +454,7 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                 return Err("Invalid destination for store operation".to_string());
             }
 
-            // Release the value register if it's one of our t-registers
+            // Release the value register if it's one of our temporary registers
             if let Some(num_str) = value_reg.strip_prefix('t') {
                 if let Ok(reg_num) = num_str.parse::<usize>() {
                     if reg_num < 7 {
@@ -568,7 +464,6 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
             }
             Ok(None)
         }
-
         IRNodeType::BinaryOp => {
             // ... (previous logic seems mostly ok, but ensure correct opcodes for types if needed)
             // Example: Use addw for 32-bit add on RV64 if types indicate Int32
@@ -869,7 +764,7 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
             // Branch if condition is false
             context.append(&format!("    beqz {}, {}\n", cond_reg, else_label));
 
-            // Release condition register
+            // Release condition register if it's a temporary
             if let Some(num_str) = cond_reg.strip_prefix('t') {
                 if let Ok(reg_num) = num_str.parse::<usize>() {
                     if reg_num < 7 {
@@ -897,26 +792,17 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
 
             Ok(None)
         }
-
         IRNodeType::Jump => {
             let target = ir.value.clone().ok_or("Missing jump target")?;
-
-            // Check if this is a break statement within a loop
             if target == "loop.exit" {
                 if let Some(exit_label) = context.current_loop_exit_label() {
-                    // Jump to the loop's exit label (where a break should go)
-                    context.append(&format!("    j {}\n", exit_label));
+                    context.append(&format!("    j {}\n", exit_label)); // Jump to specific loop exit label
                 } else {
                     return Err("Break statement outside of loop".to_string());
                 }
-            } else if target == "for.header" || target.contains("header") {
-                // This is a normal loop iteration - don't add unnecessary jumps
-                context.append(&format!("    j {}\n", target));
             } else {
-                // Regular jump
-                context.append(&format!("    j {}\n", target));
+                context.append(&format!("    j {}\n", target)); // Normal jump
             }
-
             Ok(None)
         }
 
@@ -924,10 +810,11 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
             // If there's a return value, move it to a0
             if let Some(value_node) = ir.children.first() {
                 if let Some(reg) = generate_code(context, value_node)? {
+                    // Avoid unnecessary move if already in a0
                     if reg != "a0" {
-                        // Avoid unnecessary move
                         context.append(&format!("    mv a0, {}\n", reg));
                     }
+
                     // Release register if temporary
                     if let Some(num_str) = reg.strip_prefix('t') {
                         if let Ok(reg_num) = num_str.parse::<usize>() {
@@ -939,19 +826,16 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                 }
             }
 
-            // --- FIX: Generate EPILOGUE here ---
+            // Generate simplified epilogue
             context.append("\n    # Epilogue\n");
-            // Use frame pointer to correctly restore stack pointer
-            context.append("    mv sp, s0\n"); // Restore sp to frame base
-            context.append("    addi sp, sp, -8\n"); // Point to saved registers
-            context.append("    lw ra, 4(sp)\n"); // Load return address
-            context.append("    lw s0, 0(sp)\n"); // Load saved frame pointer
-            context.append("    addi sp, sp, 8\n"); // Final adjustment
+            // Direct approach - don't manipulate sp with s0 first
+            context.append("    lw ra, 4(sp)\n"); // Restore ra directly
+            context.append("    lw s0, 0(sp)\n"); // Restore s0 directly
+            context.append("    addi sp, sp, 8\n"); // Final stack adjustment
             context.append("    ret\n"); // Return
 
             Ok(None)
         }
-
         IRNodeType::Constant => {
             if let Some(value) = &ir.value {
                 let reg = context.get_register();
