@@ -541,9 +541,14 @@ fn find_used_variables(
     // Instructions with side effects must be kept regardless of used variables
     match node.node_type {
         IRNodeType::Call => {
-            // Function calls have side effects
+            // ALL function calls have side effects and must be preserved
             let fn_id = format!("{:?}", node);
             effect_instrs.insert(fn_id);
+
+            // Mark the entire containing block as having side effects
+            if let Some(parent_id) = get_parent_block_id(node) {
+                effect_instrs.insert(parent_id);
+            }
 
             // Arguments to function calls are used
             for child in &node.children {
@@ -583,6 +588,11 @@ fn find_used_variables(
                 find_live_variables(&node.children[0], used_vars);
             }
         }
+        IRNodeType::Jump => {
+            // Jumps (including breaks) affect control flow
+            let jump_id = format!("{:?}", node);
+            effect_instrs.insert(jump_id);
+        }
         _ => {}
     }
 
@@ -592,6 +602,12 @@ fn find_used_variables(
     }
 }
 
+// Helper function to get parent block ID (for context)
+fn get_parent_block_id(node: &IRNode) -> Option<String> {
+    // This is a simplified version - in a real compiler we'd track parent nodes
+    // Here we just create a unique identifier for the containing block
+    Some(format!("PARENT_OF_{:?}", node))
+}
 // Find live variables starting from usage points
 fn find_live_variables(node: &IRNode, used_vars: &mut HashSet<String>) {
     match node.node_type {
@@ -837,13 +853,22 @@ fn advanced_loop_optimization_with_stats(node: IRNode) -> Result<(IRNode, bool, 
             let mut loop_optimized = false;
 
             // Try the most aggressive optimizations first
+            // Check if loop contains function calls with side effects
+            let mut has_side_effects = false;
+            let mut call_nodes = Vec::new();
+            collect_function_calls_from_loop(&result, &loop_info.body_blocks, &mut call_nodes);
+
+            if !call_nodes.is_empty() {
+                has_side_effects = true;
+                println!("Loop contains function calls with side effects - will preserve");
+            }
 
             // 1. Loop Elimination (if result is deterministic)
-            if let Some(result_value) = &loop_info.deterministic_result {
+            if !has_side_effects && loop_info.deterministic_result.is_some() {
                 // This loop always produces the same result, we can eliminate it
                 println!(
                     "Loop can be eliminated. Deterministic result: {:?}",
-                    result_value
+                    loop_info.deterministic_result
                 );
                 let (new_ir, elim_changed) = eliminate_deterministic_loop(result, loop_info)?;
                 result = new_ir;
@@ -1265,6 +1290,19 @@ fn eliminate_deterministic_loop(
                         }
                     }
 
+                    // Collect all function calls from the loop body to preserve their side effects
+                    let mut call_nodes = Vec::new();
+                    collect_function_calls_from_loop(
+                        &node,
+                        &loop_info.body_blocks,
+                        &mut call_nodes,
+                    );
+
+                    // Add all function calls to the replacement block in original order
+                    for call in &call_nodes {
+                        replacement.add_child(call.clone());
+                    }
+
                     // Add stores for any variables modified in the loop
                     for (var_name, value) in &loop_info.exit_variables {
                         if let Some(val) = value {
@@ -1343,6 +1381,43 @@ fn eliminate_deterministic_loop(
     }
 
     Ok((result, changed))
+}
+
+// Helper function to collect all function calls from a loop body
+fn collect_function_calls_from_loop(
+    node: &IRNode,
+    body_blocks: &[String],
+    call_nodes: &mut Vec<IRNode>,
+) {
+    // Check if this is a loop body block
+    let in_loop_body = if let IRNodeType::BasicBlock = node.node_type {
+        if let Some(block_name) = &node.value {
+            body_blocks.contains(block_name)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    // If we're in a loop body, collect function calls
+    if in_loop_body {
+        for child in &node.children {
+            if let IRNodeType::Call = child.node_type {
+                call_nodes.push(child.clone());
+            } else {
+                // Recursively search for calls in nested blocks
+                collect_function_calls_from_loop(child, body_blocks, call_nodes);
+            }
+        }
+    }
+
+    // If not in a loop body, check all children recursively
+    if !in_loop_body {
+        for child in &node.children {
+            collect_function_calls_from_loop(child, body_blocks, call_nodes);
+        }
+    }
 }
 // Reduce loop bounds when we know it exits early
 fn reduce_loop_bounds(node: IRNode, loop_info: &LoopInfo) -> Result<(IRNode, bool), String> {
