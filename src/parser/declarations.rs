@@ -33,10 +33,28 @@ impl<'a> Parser<'a> {
         if self.check(TokenType::LeftParen) {
             self.parse_function_declaration(data_type, name)
         } else {
-            self.parse_variable_declaration_with_type()
+            // Process variable declaration right here
+            let mut var_node = ASTNode::new(ASTNodeType::VariableDeclaration, Some(name));
+
+            // Create a type node
+            let type_node = ASTNode::new(ASTNodeType::Type, Some(format!("{:?}", data_type)));
+            var_node.add_child(type_node);
+
+            // Check for initializer
+            if self.match_token(&[TokenType::Equal]) {
+                let initializer = self.parse_expression()?;
+                var_node.add_child(initializer);
+            }
+
+            // Expect semicolon
+            self.consume(
+                TokenType::Semicolon,
+                "Expected ';' after variable declaration.",
+            )?;
+
+            Ok(var_node)
         }
     }
-
     pub fn parse_function_declaration(
         &mut self,
         return_type: DataType,
@@ -137,6 +155,12 @@ impl<'a> Parser<'a> {
         let type_node = ASTNode::new(ASTNodeType::Type, Some(format!("{:?}", data_type)));
         first_var.add_child(type_node);
 
+        // Add support for initializers - this is the key addition
+        if self.match_token(&[TokenType::Equal]) {
+            let initializer = self.parse_expression()?;
+            first_var.add_child(initializer);
+        }
+
         // Add the first variable to our block
         block_node.add_child(first_var);
 
@@ -153,6 +177,12 @@ impl<'a> Parser<'a> {
                 let mut next_var = ASTNode::new(ASTNodeType::VariableDeclaration, Some(next_name));
                 let next_type = ASTNode::new(ASTNodeType::Type, Some(format!("{:?}", data_type)));
                 next_var.add_child(next_type);
+
+                // Also check for initializer here
+                if self.match_token(&[TokenType::Equal]) {
+                    let initializer = self.parse_expression()?;
+                    next_var.add_child(initializer);
+                }
 
                 // Add it to our block
                 block_node.add_child(next_var);
