@@ -89,6 +89,9 @@ impl CodeGenContext {
             }
         }
         // If all registers are in use, we'll use t0 (could implement spilling here)
+        // This should be extremely rare and is a fallback for extreme cases
+        println!("WARNING: Register allocation exhausted, forcing use of t0");
+        self.reg_in_use[0] = true;  // Mark t0 as in use to avoid double allocation
         0
     }
 
@@ -96,6 +99,17 @@ impl CodeGenContext {
     fn release_register(&mut self, reg: usize) {
         if reg < 7 {
             self.reg_in_use[reg] = false;
+        }
+    }
+    
+    // Helper to attempt to release a register from a register string
+    fn try_release_register_str(&mut self, reg_str: &str) {
+        if let Some(num_str) = reg_str.strip_prefix('t') {
+            if let Ok(reg_num) = num_str.parse::<usize>() {
+                if reg_num < 7 {
+                    self.release_register(reg_num);
+                }
+            }
         }
     }
 
@@ -286,9 +300,18 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                 if name == "main" {
                     context.append("    li a0, 0\n"); // Implicit return 0 for main
                 }
+                
                 // Standard Epilogue Sequence
-                context.append("    mv sp, s0\n"); // Restore sp to frame base
-                context.append("    addi sp, sp, -8\n"); // Point to saved registers
+                // Reset all temporary registers to ensure clean state
+                for i in 0..7 {
+                    context.reg_in_use[i] = false;
+                }
+                
+                // Reset the stack frame properly
+                context.append("    mv sp, s0\n");  // Set stack pointer back to frame pointer
+                context.append("    addi sp, sp, -8\n");  // Adjust to access saved registers
+                
+                // Now restore saved registers
                 context.append("    lw ra, 4(sp)\n"); // Restore ra
                 context.append("    lw s0, 0(sp)\n"); // Restore s0
                 context.append("    addi sp, sp, 8\n"); // Final adjustment
@@ -455,13 +478,7 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
             }
 
             // Release the value register if it's one of our temporary registers
-            if let Some(num_str) = value_reg.strip_prefix('t') {
-                if let Ok(reg_num) = num_str.parse::<usize>() {
-                    if reg_num < 7 {
-                        context.release_register(reg_num);
-                    }
-                }
-            }
+            context.try_release_register_str(&value_reg);
             Ok(None)
         }
         IRNodeType::BinaryOp => {
@@ -587,20 +604,8 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
             }
 
             // Release operand registers if temporary
-            if let Some(num_str) = left_reg_str.strip_prefix('t') {
-                if let Ok(reg_num) = num_str.parse::<usize>() {
-                    if reg_num < 7 {
-                        context.release_register(reg_num);
-                    }
-                }
-            }
-            if let Some(num_str) = right_reg_str.strip_prefix('t') {
-                if let Ok(reg_num) = num_str.parse::<usize>() {
-                    if reg_num < 7 {
-                        context.release_register(reg_num);
-                    }
-                }
-            }
+            context.try_release_register_str(&left_reg_str);
+            context.try_release_register_str(&right_reg_str);
 
             Ok(Some(result_reg_str))
         }
@@ -623,18 +628,16 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
             }
 
             // Release operand register if it's a temporary
-            if let Some(num_str) = operand_reg.strip_prefix('t') {
-                if let Ok(reg_num) = num_str.parse::<usize>() {
-                    if reg_num < 7 {
-                        context.release_register(reg_num);
-                    }
-                }
-            }
+            context.try_release_register_str(&operand_reg);
 
             Ok(Some(format!("t{}", result_reg)))
         }
 
         IRNodeType::Call => {
+            // Clear any existing register tracking before we make the call
+            // This prevents leaked registers from affecting other parts of the code
+            context.append("    # Preparing for function call\n");
+            
             // Save all currently used registers
             let mut saved_regs = Vec::new();
             for i in 0..7 {
@@ -645,10 +648,14 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
 
             // Push registers to save them
             if !saved_regs.is_empty() {
-                for (i, reg) in saved_regs.iter().enumerate() {
-                    context.append(&format!("    sw t{}, -{}(sp)\n", reg, (i + 1) * 4));
-                }
+                context.append("    # Save used registers\n");
+                // First allocate space on stack
                 context.append(&format!("    addi sp, sp, -{}\n", saved_regs.len() * 4));
+                
+                // Then store registers
+                for (i, reg) in saved_regs.iter().enumerate() {
+                    context.append(&format!("    sw t{}, {}(sp)\n", reg, i * 4));
+                }
             }
 
             // Get function name
@@ -685,13 +692,7 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                         context.append(&format!("    mv a{}, {}\n", i, reg));
 
                         // Release register if temporary
-                        if let Some(num_str) = reg.strip_prefix('t') {
-                            if let Ok(reg_num) = num_str.parse::<usize>() {
-                                if reg_num < 7 {
-                                    context.release_register(reg_num);
-                                }
-                            }
-                        }
+                        context.try_release_register_str(&reg);
                     }
                 }
             } else {
@@ -707,13 +708,7 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                         }
 
                         // Release register if temporary
-                        if let Some(num_str) = reg.strip_prefix('t') {
-                            if let Ok(reg_num) = num_str.parse::<usize>() {
-                                if reg_num < 7 {
-                                    context.release_register(reg_num);
-                                }
-                            }
-                        }
+                        context.try_release_register_str(&reg);
                     }
                 }
             }
@@ -731,15 +726,16 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
 
             // Restore saved registers
             if !saved_regs.is_empty() {
-                context.append(&format!("    addi sp, sp, {}\n", saved_regs.len() * 4));
+                context.append("    # Restore saved registers\n");
+                
+                // Load the registers back
                 for (i, reg) in saved_regs.iter().enumerate() {
-                    context.append(&format!(
-                        "    lw t{}, -{}(sp)\n",
-                        reg,
-                        (saved_regs.len() - i) * 4
-                    ));
+                    context.append(&format!("    lw t{}, {}(sp)\n", reg, i * 4));
                     context.reg_in_use[*reg] = true; // Mark as in-use again
                 }
+                
+                // Free the stack space
+                context.append(&format!("    addi sp, sp, {}\n", saved_regs.len() * 4));
             }
 
             // Return value is in a0
@@ -816,22 +812,26 @@ fn generate_code(context: &mut CodeGenContext, ir: &IRNode) -> Result<Option<Str
                     }
 
                     // Release register if temporary
-                    if let Some(num_str) = reg.strip_prefix('t') {
-                        if let Ok(reg_num) = num_str.parse::<usize>() {
-                            if reg_num < 7 {
-                                context.release_register(reg_num);
-                            }
-                        }
-                    }
+                    context.try_release_register_str(&reg);
                 }
             }
 
-            // Generate simplified epilogue
+            // Generate proper epilogue
             context.append("\n    # Epilogue\n");
-            // Direct approach - don't manipulate sp with s0 first
-            context.append("    lw ra, 4(sp)\n"); // Restore ra directly
-            context.append("    lw s0, 0(sp)\n"); // Restore s0 directly
-            context.append("    addi sp, sp, 8\n"); // Final stack adjustment
+            
+            // Reset all temporary registers to ensure clean state
+            for i in 0..7 {
+                context.reg_in_use[i] = false;
+            }
+            
+            // Reset the stack frame to where it was in the prologue
+            context.append("    mv sp, s0\n");  // Set stack pointer back to frame pointer
+            context.append("    addi sp, sp, -8\n");  // Adjust to access saved registers
+            
+            // Now restore the saved registers
+            context.append("    lw ra, 4(sp)\n"); // Restore ra
+            context.append("    lw s0, 0(sp)\n"); // Restore s0
+            context.append("    addi sp, sp, 8\n"); // Final adjustment for saved regs
             context.append("    ret\n"); // Return
 
             Ok(None)
