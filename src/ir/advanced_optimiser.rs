@@ -38,6 +38,12 @@ impl OptimizationStats {
 pub fn optimise_ir(ir: IRNode) -> Result<IRNode, String> {
     println!("\n---------Starting Advanced Optimization---------");
 
+    // ADDED: Check if there are any printf calls that need to be preserved
+    let has_printf_calls = contains_printf(&ir);
+    if has_printf_calls {
+        println!("Detected printf calls - will use conservative optimizations to preserve output");
+    }
+
     // Record optimization statistics
     let mut stats = OptimizationStats::new();
 
@@ -67,11 +73,20 @@ pub fn optimise_ir(ir: IRNode) -> Result<IRNode, String> {
         stats.loops_optimized += loop_count;
 
         // 3. Dead Code Elimination - Run after loop optimization to remove dead branches
-        let (new_ir, dce_changed, dce_count) =
-            enhanced_dead_code_elimination_with_stats(optimized)?;
-        optimized = new_ir;
-        changed |= dce_changed;
-        stats.dead_code_removed += dce_count;
+        // MODIFIED: If the program has printf calls, be more conservative with DCE
+        if has_printf_calls {
+            // Use more conservative dead code elimination that preserves printf calls
+            let (new_ir, dce_changed) = eliminate_dead_code_except_printf(optimized)?;
+            optimized = new_ir;
+            changed |= dce_changed;
+        } else {
+            // Use normal aggressive dead code elimination
+            let (new_ir, dce_changed, dce_count) =
+                enhanced_dead_code_elimination_with_stats(optimized)?;
+            optimized = new_ir;
+            changed |= dce_changed;
+            stats.dead_code_removed += dce_count;
+        }
 
         // 4. Common Subexpression Elimination
         let (new_ir, cse_changed, cse_count) =
@@ -602,6 +617,123 @@ fn find_used_variables(
     }
 }
 
+// ADDED: Helper function to check if a node or its children contain printf calls
+fn contains_printf(node: &IRNode) -> bool {
+    // Check if this node is a printf call
+    if let IRNodeType::Call = node.node_type {
+        if let Some(func_name) = &node.value {
+            if func_name == "printf" {
+                return true;
+            }
+        }
+    }
+    
+    // Check children recursively
+    for child in &node.children {
+        if contains_printf(child) {
+            return true;
+        }
+    }
+    
+    false
+}
+
+// ADDED: More conservative DCE that always preserves printf calls
+fn eliminate_dead_code_except_printf(node: IRNode) -> Result<(IRNode, bool), String> {
+    let mut used_vars = HashSet::new();
+    let mut effect_instrs = HashSet::new();
+    let mut reachable_blocks = HashMap::new();
+    
+    // First, collect all variables used in printf calls
+    collect_printf_variables(&node, &mut used_vars);
+    
+    // Then analyze control flow to identify reachable blocks
+    analyze_control_flow(&node, &mut reachable_blocks);
+    
+    // Find used variables in reachable code
+    find_used_variables(&node, &mut used_vars, &mut effect_instrs, &reachable_blocks);
+    
+    // Remove dead code while preserving printf calls
+    let (result, changed, _) = remove_dead_code_with_stats(node, &used_vars, &effect_instrs, &reachable_blocks)?;
+    
+    Ok((result, changed))
+}
+
+// ADDED: Helper function to collect all variables used in printf calls
+fn collect_printf_variables(node: &IRNode, used_vars: &mut HashSet<String>) {
+    // Check if this is a printf call
+    if let IRNodeType::Call = node.node_type {
+        if let Some(func_name) = &node.value {
+            if func_name == "printf" {
+                // Mark all variables used in the printf arguments as used
+                for child in &node.children {
+                    collect_all_variables(child, used_vars);
+                }
+            }
+        }
+    }
+    
+    // Recursively check children
+    for child in &node.children {
+        collect_printf_variables(child, used_vars);
+    }
+}
+
+// ADDED: Helper function to collect all variables in a subtree
+fn collect_all_variables(node: &IRNode, vars: &mut HashSet<String>) {
+    match node.node_type {
+        IRNodeType::Variable => {
+            if let Some(var_name) = &node.value {
+                vars.insert(var_name.clone());
+            }
+        }
+        IRNodeType::Load => {
+            if !node.children.is_empty() {
+                if let IRNodeType::Variable = node.children[0].node_type {
+                    if let Some(var_name) = &node.children[0].value {
+                        vars.insert(var_name.clone());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    // Recursively check all children
+    for child in &node.children {
+        collect_all_variables(child, vars);
+    }
+}
+
+// ADDED: Helper function to check if a variable is used in any printf calls
+fn is_var_used_in_printf(node: &IRNode, var_name: &str) -> bool {
+    // Find all printf calls in the IR
+    let mut printf_vars = HashSet::new();
+    collect_printf_variables_in_tree(node, &mut printf_vars);
+    
+    // Check if our variable is among those used in printf calls
+    printf_vars.contains(var_name)
+}
+
+// ADDED: Helper function to find all variables used in printf calls in a subtree
+fn collect_printf_variables_in_tree(node: &IRNode, vars: &mut HashSet<String>) {
+    if let IRNodeType::Call = node.node_type {
+        if let Some(func_name) = &node.value {
+            if func_name == "printf" {
+                // This is a printf call - collect all variables it uses
+                for child in &node.children {
+                    collect_all_variables(child, vars);
+                }
+            }
+        }
+    }
+    
+    // Recursively check children
+    for child in &node.children {
+        collect_printf_variables_in_tree(child, vars);
+    }
+}
+
 // Helper function to get parent block ID (for context)
 fn get_parent_block_id(node: &IRNode) -> Option<String> {
     // This is a simplified version - in a real compiler we'd track parent nodes
@@ -687,6 +819,26 @@ fn remove_dead_code_with_stats(
         }
     }
 
+    // ADDED: Check if this block or any child contains a printf call
+    if contains_printf(&result) {
+        println!("Preserving block with printf call");
+        
+        // Process children but keep the structure
+        let mut new_children = Vec::new();
+        
+        for child in result.children {
+            let (new_child, child_changed, child_removed) = 
+                remove_dead_code_with_stats(child, used_vars, effect_instrs, reachable_blocks)?;
+                
+            new_children.push(new_child);
+            changed |= child_changed;
+            removed_count += child_removed;
+        }
+        
+        result.children = new_children;
+        return Ok((result, changed, removed_count));
+    }
+
     // Check if this is an unreachable block
     if let IRNodeType::BasicBlock = result.node_type {
         if let Some(block_name) = &result.value {
@@ -713,7 +865,7 @@ fn remove_dead_code_with_stats(
         let mut new_children = Vec::new();
 
         for child in result.children {
-            if should_keep_instruction(&child, used_vars, effect_instrs) {
+            if should_keep_instruction(&child, used_vars, effect_instrs) || contains_printf(&child) {
                 // Process the children of instructions we're keeping
                 let (new_child, child_changed, child_removed) =
                     remove_dead_code_with_stats(child, used_vars, effect_instrs, reachable_blocks)?;
@@ -738,23 +890,32 @@ fn remove_dead_code_with_stats(
             if let IRNodeType::Constant = result.children[0].node_type {
                 if let Some(val) = &result.children[0].value {
                     if let Ok(val_int) = val.parse::<i32>() {
-                        // Determine which branch to keep
-                        let keep_idx = if val_int != 0 { 1 } else { 2 };
+                        // MODIFIED: Check if any branch target contains printf calls
+                        let contains_side_effects = 
+                            result.children.iter().skip(1).any(|child| contains_printf(child));
+                            
+                        if !contains_side_effects {
+                            // Only simplify if there are no printf calls in either branch
+                            // Determine which branch to keep
+                            let keep_idx = if val_int != 0 { 1 } else { 2 };
 
-                        if result.children.len() > keep_idx {
-                            // Replace branch with the target block
-                            let (target_block, target_changed, target_removed) =
-                                remove_dead_code_with_stats(
-                                    result.children[keep_idx].clone(),
-                                    used_vars,
-                                    effect_instrs,
-                                    reachable_blocks,
-                                )?;
+                            if result.children.len() > keep_idx {
+                                // Replace branch with the target block
+                                let (target_block, target_changed, target_removed) =
+                                    remove_dead_code_with_stats(
+                                        result.children[keep_idx].clone(),
+                                        used_vars,
+                                        effect_instrs,
+                                        reachable_blocks,
+                                    )?;
 
-                            println!("Simplified constant branch to direct block");
-                            changed = true;
-                            removed_count += result.children.len() - 1; // Count the removed branch and condition
-                            return Ok((target_block, true, removed_count + target_removed));
+                                println!("Simplified constant branch to direct block");
+                                changed = true;
+                                removed_count += result.children.len() - 1; // Count the removed branch and condition
+                                return Ok((target_block, true, removed_count + target_removed));
+                            }
+                        } else {
+                            println!("Preserving branch with printf calls in targets");
                         }
                     }
                 }
@@ -791,11 +952,25 @@ fn should_keep_instruction(
         IRNodeType::Return | IRNodeType::Branch | IRNodeType::Jump => true,
 
         // Always keep calls as they may have side effects
-        IRNodeType::Call => true,
+        IRNodeType::Call => {
+            // MODIFIED: Always keep printf calls and any other function call
+            if let Some(func_name) = &instr.value {
+                if func_name == "printf" {
+                    // Always preserve printf calls
+                    println!("Preserving printf call: {:?}", instr);
+                    return true;
+                }
+            }
+            true // Keep all other calls too
+        }
 
         // Keep allocations for used variables
         IRNodeType::Alloca => {
             if let Some(var_name) = &instr.value {
+                // MODIFIED: If any printf call uses this variable, keep it
+                if is_var_used_in_printf(instr, var_name) {
+                    return true;
+                }
                 used_vars.contains(var_name)
             } else {
                 true // If no name, conservatively keep it
@@ -807,6 +982,10 @@ fn should_keep_instruction(
             if instr.children.len() > 1 {
                 if let IRNodeType::Variable = instr.children[1].node_type {
                     if let Some(var_name) = &instr.children[1].value {
+                        // MODIFIED: If any printf call uses this variable, keep it
+                        if is_var_used_in_printf(instr, var_name) {
+                            return true;
+                        }
                         used_vars.contains(var_name)
                     } else {
                         true
@@ -820,7 +999,7 @@ fn should_keep_instruction(
         }
 
         // For all other instructions, keep if they have side effects or are part of a basic block
-        _ => effect_instrs.contains(&instr_id),
+        _ => effect_instrs.contains(&instr_id) || contains_printf(instr),
     }
 }
 
